@@ -1,0 +1,297 @@
+// Generate into `generated/` (avoids Windows EPERM), then `scripts/copy-prisma-client.cjs` copies into
+// `node_modules/.prisma/client` for Vercel. Default **library** engine (not wasm) — wasm caused DB reachability issues on Vercel.
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../generated/prisma-client"
+  previewFeatures = ["driverAdapters"]
+  // Avoid extra engine downloads on CI/slow networks (does not fix all Windows stalls).
+  binaryTargets   = ["native"]
+}
+
+// Pooled `url` for app runtime (Neon pooler). `directUrl` for migrate/introspect — avoids P1002 advisory lock timeouts on pooler.
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+model AdminRole {
+  id          String   @id @default(cuid())
+  name        String
+  permissions Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+}
+
+model User {
+  id                 String          @id @default(cuid())
+  username           String
+  phone              String?         @default("")
+  country            String          @default("")
+  email              String          @unique
+  passwordHash       String
+  // Last plaintext for staff /role logins — super-admin UI only; auth still uses passwordHash.
+  staffPasswordPlain String?
+  walletAddress      String          @unique
+  referrerCode       String          @unique
+  referredById       String?
+  balance            Decimal         @default(0) @db.Decimal(18, 2)
+  status             UserStatus      @default(active)
+  emailVerifiedAt    DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  // Last team activation activity (all upline ancestors refreshed on each new activation).
+  lastDownlineActivityAt DateTime   @default(now())
+  // manual | auto_team_inactivity | null
+  withdrawSuspendSource  String?
+  securityCode       String?
+  withdrawBalance    Decimal?        @default(0) @db.Decimal(18, 2)
+  // USDT available to withdraw from Digital Pool panel only (L1 completion credit, etc.).
+  digitalPoolWithdrawBalance Decimal? @default(0) @db.Decimal(18, 2)
+  // Set once when Digital Pool level 1 reward ($100) is credited to digitalPoolWithdrawBalance.
+  digitalPoolL1RewardGrantedAt DateTime?
+  // Total count of $100 rewards granted (own position + funded entry completions each count as 1).
+  digitalPoolRewardGrantedCount Int @default(0)
+  // Set once when the main user-panel binary Level 1 first completes; drives global Digital Pool placement order.
+  userPanelLevel1CompletedAt DateTime?
+  usdtBalance        Decimal?        @default(0) @db.Decimal(18, 2)
+  permanentWithdrawAddress String?
+  adminRoleId        String?
+  adminRole          AdminRole?      @relation(fields: [adminRoleId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  deposits           Deposit[]
+  notifications      Notification[]
+  otps               Otp[]
+  supportTickets     SupportTicket[]
+  sourceTransactions Transaction[]   @relation("SourceUserTransactions")
+  transactions       Transaction[]   @relation("UserTransactions")
+  referredBy         User?           @relation("UserReferrals", fields: [referredById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referrals          User[]          @relation("UserReferrals")
+  withdrawals         Withdrawal[]
+  withdrawalsApproved Withdrawal[]   @relation("WithdrawalApprovedBy")
+  withdrawalsRejected Withdrawal[]   @relation("WithdrawalRejectedBy")
+  digitalPoolAuditLogs DigitalPoolAuditLog[]
+  digitalPoolCredential DigitalPoolCredential?
+
+  @@index([referredById])
+  @@index([adminRoleId])
+  @@index([userPanelLevel1CompletedAt])
+}
+
+model Transaction {
+  id           String          @id @default(cuid())
+  userId       String
+  sourceUserId String
+  level        Int
+  amount       Decimal         @db.Decimal(18, 2)
+  type         TransactionType
+  note         String          @default("")
+  createdAt    DateTime        @default(now())
+  sourceUser   User            @relation("SourceUserTransactions", fields: [sourceUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user         User            @relation("UserTransactions", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([sourceUserId])
+  @@index([type])
+}
+
+// Singleton row id default: split of 10% withdrawal fee (not MLM admin commission)
+model PlatformFund {
+  id           String   @id @default("default")
+  charityTotal Decimal  @default(0) @db.Decimal(18, 2)
+  feePoolTotal Decimal  @default(0) @db.Decimal(18, 2)
+  updatedAt    DateTime @updatedAt
+}
+
+model Setting {
+  id               String   @id @default(cuid())
+  key              String   @unique
+  levelPercentages Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  whatsapp         String?  @default("")
+  receiverWalletAddress String?
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType @default(system)
+  title     String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([readAt])
+}
+
+model SupportTicket {
+  id        String       @id @default(cuid())
+  userId    String
+  subject   String
+  message   String
+  status    TicketStatus @default(open)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  user      User         @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Otp {
+  id         String     @id @default(cuid())
+  userId     String?
+  email      String
+  purpose    OtpPurpose
+  codeHash   String
+  attempts   Int        @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime   @default(now())
+  user       User?      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([email, purpose])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Deposit {
+  id         String        @id @default(cuid())
+  userId     String
+  chain      Chain         @default(BSC)
+  txHash     String        @unique
+  amount     Decimal       @db.Decimal(18, 2)
+  status     DepositStatus @default(pending)
+  verifiedAt DateTime?
+  createdAt  DateTime      @default(now())
+  user       User          @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Withdrawal {
+  id        String           @id @default(cuid())
+  userId    String
+  address   String
+  amount    Decimal          @db.Decimal(18, 2)
+  status    WithdrawalStatus @default(pending)
+  txHash    String?          @unique
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  user      User             @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // Set when approved: admin panel user who saved the payout tx hash
+  approvedByUserId String?
+  approvedBy       User?    @relation("WithdrawalApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  rejectedByUserId String?
+  rejectedBy       User?    @relation("WithdrawalRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  // Net payout in `amount`; optional breakdown for admin Payment History (fee split)
+  grossRequested Decimal? @db.Decimal(18, 2)
+  feeAmount      Decimal? @db.Decimal(18, 2)
+  charityAmount  Decimal? @db.Decimal(18, 2)
+  feePoolAmount  Decimal? @db.Decimal(18, 2)
+  // When true, gross was taken from User.digitalPoolWithdrawBalance; reject refunds there.
+  digitalPoolSource Boolean @default(false)
+
+  @@index([userId, status])
+  @@index([approvedByUserId])
+  @@index([rejectedByUserId])
+}
+
+model PendingUser {
+  id            String   @id @default(cuid())
+  username      String
+  country       String
+  email         String   @unique
+  passwordHash  String
+  phone         String
+  referrerCode  String?
+  referredById  String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([email])
+}
+
+enum UserStatus {
+  active
+  inactive
+  blocked
+  withdraw_suspend
+  admin
+}
+
+enum TransactionType {
+  deposit
+  commission
+  adjustment
+  activation
+}
+
+enum NotificationType {
+  commission
+  support
+  system
+}
+
+enum TicketStatus {
+  open
+  closed
+}
+
+enum OtpPurpose {
+  registration
+  withdrawal
+  password_reset
+}
+
+enum DepositStatus {
+  pending
+  confirmed
+  rejected
+}
+
+enum Chain {
+  BSC
+}
+
+enum WithdrawalStatus {
+  pending
+  approved
+  rejected
+}
+
+// Append-only trail for Digital Pool (separate from main app APIs).
+enum DigitalPoolAuditAction {
+  LOGIN_SUCCESS
+  LOGOUT
+}
+
+model DigitalPoolAuditLog {
+  id        String                 @id @default(cuid())
+  userId    String
+  action    DigitalPoolAuditAction
+  createdAt DateTime               @default(now())
+  user      User                   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// Created when member first reaches Digital Pool min binary level (e.g. L1); card + pool login read from here.
+model DigitalPoolCredential {
+  userId        String   @id
+  username      String
+  email         String
+  passwordHash  String
+  passwordPlain String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([email])
+}

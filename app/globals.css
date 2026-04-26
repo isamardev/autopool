@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a1420;
+  --foreground: #eaf6ff;
+  --primary: #00b2a3;
+  --secondary: rgba(15, 29, 46, 0.92);
+  --accent: #00ffd1;
+  --muted: rgba(13, 27, 42, 0.9);
+  --card: rgba(11, 23, 38, 0.9);
+  --ring: #17324a;
+  --subtext: #8fb3c9;
+}
+
+html {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-secondary: var(--secondary);
+  --color-accent: var(--accent);
+  --color-muted: var(--muted);
+  --color-card: var(--card);
+  --color-ring: var(--ring);
+  --color-subtext: var(--subtext);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background-color: var(--background);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='960' height='720' viewBox='0 0 960 720'%3E%3Cg fill='none' stroke='rgba(0,255,209,0.16)' stroke-width='1'%3E%3Cpath d='M84 98 L238 72 L336 162 L242 256 L96 220 Z'/%3E%3Cpath d='M520 84 L686 56 L790 160 L702 282 L544 236 Z'/%3E%3Cpath d='M112 458 L254 396 L394 466 L318 616 L146 602 Z'/%3E%3Cpath d='M566 404 L742 356 L884 466 L794 636 L614 604 Z'/%3E%3Cpath d='M420 270 L512 220 L626 266 L594 392 L466 404 Z'/%3E%3C/g%3E%3Cg fill='none' stroke='rgba(0,201,255,0.14)' stroke-width='1'%3E%3Cpath d='M60 330 L180 280 L280 350 L210 470 L90 440 Z'/%3E%3Cpath d='M360 120 L460 80 L580 140 L540 250 L410 240 Z'/%3E%3Cpath d='M720 260 L860 220 L930 320 L840 420 L700 380 Z'/%3E%3C/g%3E%3Cg fill='rgba(0,255,209,0.18)'%3E%3Ccircle cx='84' cy='98' r='3'/%3E%3Ccircle cx='238' cy='72' r='3'/%3E%3Ccircle cx='336' cy='162' r='3'/%3E%3Ccircle cx='242' cy='256' r='3'/%3E%3Ccircle cx='96' cy='220' r='3'/%3E%3Ccircle cx='520' cy='84' r='3'/%3E%3Ccircle cx='686' cy='56' r='3'/%3E%3Ccircle cx='790' cy='160' r='3'/%3E%3Ccircle cx='702' cy='282' r='3'/%3E%3Ccircle cx='544' cy='236' r='3'/%3E%3Ccircle cx='112' cy='458' r='3'/%3E%3Ccircle cx='254' cy='396' r='3'/%3E%3Ccircle cx='394' cy='466' r='3'/%3E%3Ccircle cx='318' cy='616' r='3'/%3E%3Ccircle cx='146' cy='602' r='3'/%3E%3Ccircle cx='566' cy='404' r='3'/%3E%3Ccircle cx='742' cy='356' r='3'/%3E%3Ccircle cx='884' cy='466' r='3'/%3E%3Ccircle cx='794' cy='636' r='3'/%3E%3Ccircle cx='614' cy='604' r='3'/%3E%3Ccircle cx='420' cy='270' r='3'/%3E%3Ccircle cx='512' cy='220' r='3'/%3E%3Ccircle cx='626' cy='266' r='3'/%3E%3Ccircle cx='594' cy='392' r='3'/%3E%3Ccircle cx='466' cy='404' r='3'/%3E%3C/g%3E%3C/svg%3E"),
+    radial-gradient(800px 400px at 10% 10%, rgba(0, 201, 255, 0.18), transparent 60%),
+    radial-gradient(600px 300px at 85% 15%, rgba(0, 255, 209, 0.14), transparent 62%),
+    radial-gradient(700px 500px at 50% 85%, rgba(56, 189, 248, 0.10), transparent 65%),
+    linear-gradient(180deg, #0a1420 0%, #0f1d2e 60%, #0a1420 100%);
+  background-attachment: fixed;
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size: cover, auto, auto, auto, auto;
+  background-position: center, center, center, center, center;
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+@media (max-width: 767px) {
+  body {
+    background-attachment: scroll;
+  }
+}
+
+/* Custom Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ring);
+  border-radius: 10px;
+  border: 2px solid var(--background);
+  transition: all 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* For Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ring) var(--background);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--ring);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* Read-only password in admin: hide browser reveal / eye where supported */
+.admin-password-mask::-ms-reveal {
+  display: none;
+}
+.admin-password-mask::-webkit-credentials-auto-fill-button {
+  display: none !important;
+  visibility: hidden;
+  pointer-events: none;
+}
