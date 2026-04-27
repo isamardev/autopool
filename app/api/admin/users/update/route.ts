@@ -4,7 +4,7 @@ import { getDb } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { requireAdminSection, requireSuperAdmin } from "@/lib/admin-api-guard";
 import { runActivationPayoutEngine } from "@/lib/mlm-logic";
-import { MANUAL_SUSPEND_SOURCE } from "@/lib/team-withdraw-activity";
+import { MANUAL_SUSPEND_SOURCE, onNewMemberRegistered } from "@/lib/team-withdraw-activity";
 import { reconcileDigitalPoolAfterTeamChange } from "@/lib/digital-pool-credential-db";
 
 function num(v: unknown, fallback = 0): number {
@@ -191,6 +191,15 @@ export async function PATCH(req: Request) {
           note: "Admin activation",
           skipUserDeduction: true,
         });
+        try {
+          await db.user.update({
+            where: { id },
+            data: { lastDownlineActivityAt: new Date() },
+          });
+          await onNewMemberRegistered(db, id);
+        } catch (hookErr) {
+          console.error("Admin user update: team withdraw activity hook failed", hookErr);
+        }
       } catch (actErr) {
         console.error("Admin user update: activation engine failed", actErr);
         return NextResponse.json({ error: "ACTIVATION_FAILED" }, { status: 500 });

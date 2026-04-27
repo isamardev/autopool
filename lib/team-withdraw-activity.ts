@@ -125,3 +125,78 @@ export async function runTeamWithdrawAutoSuspendSweep(db: ReturnType<typeof getD
 
   return { updated: res.count };
 }
+
+/**
+ * If this user is auto withdraw-suspended but some downline has an activation **after** their
+ * `lastDownlineActivityAt`, the hook likely missed — re-run {@link onNewMemberRegistered} from
+ * that downline so uplines (including this user) recover without manual steps.
+ */
+export async function tryRepairAutoWithdrawSuspendFromDownlineProof(
+  db: ReturnType<typeof getDb>,
+  sponsorUserId: string,
+): Promise<boolean> {
+  const u = await db.user.findUnique({
+    where: { id: sponsorUserId },
+    select: {
+      status: true,
+      withdrawSuspendSource: true,
+      adminRoleId: true,
+      lastDownlineActivityAt: true,
+    },
+  });
+  if (!u || u.adminRoleId != null) return false;
+  if (u.status !== "withdraw_suspend" || u.withdrawSuspendSource !== AUTO_SUSPEND_SOURCE) return false;
+
+  const rows = await db.$queryRaw<Array<{ downline_id: string }>>`
+    WITH RECURSIVE downline AS (
+      SELECT id FROM "User" WHERE "referredById" = ${sponsorUserId}
+      UNION ALL
+      SELECT u.id FROM "User" u
+      INNER JOIN downline d ON u."referredById" = d.id
+    )
+    SELECT d.id AS downline_id
+    FROM downline d
+    INNER JOIN "Transaction" t ON t."userId" = d.id AND t."sourceUserId" = d.id AND t.type = 'activation'::"TransactionType"
+    WHERE t."createdAt" > ${u.lastDownlineActivityAt}
+    ORDER BY t."createdAt" ASC
+    LIMIT 1
+  `;
+
+  const dId = rows[0]?.downline_id;
+  if (!dId) return false;
+
+  await onNewMemberRegistered(db, dId);
+  return true;
+}
+
+/** Batch repair for cron / admin list — every auto-suspended user checked once (fresh row per iteration). */
+export async function repairAllMissedAutoWithdrawSuspends(
+  db: ReturnType<typeof getDb>,
+): Promise<{ restored: number }> {
+  const stuck = await db.user.findMany({
+    where: {
+      status: "withdraw_suspend",
+      withdrawSuspendSource: AUTO_SUSPEND_SOURCE,
+      adminRoleId: null,
+    },
+    select: { id: true },
+  });
+
+  let restored = 0;
+  for (const p of stuck) {
+    const ok = await tryRepairAutoWithdrawSuspendFromDownlineProof(db, p.id);
+    if (ok) restored += 1;
+  }
+
+  return { restored };
+}
+
+/** Repairs missed upline hooks, then applies inactivity suspend — correct order for scheduled jobs. */
+export async function runTeamWithdrawSuspendCycle(db: ReturnType<typeof getDb>): Promise<{
+  restored: number;
+  suspended: number;
+}> {
+  const { restored } = await repairAllMissedAutoWithdrawSuspends(db);
+  const { updated } = await runTeamWithdrawAutoSuspendSweep(db);
+  return { restored, suspended: updated };
+}

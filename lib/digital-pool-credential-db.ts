@@ -238,14 +238,22 @@ export async function reconcileDigitalPoolAfterTeamChange(
   await syncDigitalPoolCredentialsForReferralAncestors(db, memberUserId);
   const creds = await reconcileDigitalPoolCredentials(db, { take: 200 });
   const { nodes } = await buildDigitalPoolNetworkResponse(db, memberUserId);
-  const rewards = await tryGrantDigitalPoolL1RewardsForCompletedTree(db, nodes);
+  let rewardsChecked = 0;
+  let rewardsGranted = 0;
+  try {
+    const rewards = await tryGrantDigitalPoolL1RewardsForCompletedTree(db, nodes);
+    rewardsChecked = rewards.checked;
+    rewardsGranted = rewards.granted;
+  } catch (e) {
+    console.error("[reconcileDigitalPoolAfterTeamChange] rewards", e);
+  }
 
   return {
     credentialsScanned: creds.scanned,
     credentialsCreated: creds.created,
     credentialsSynced: creds.synced,
-    rewardsChecked: rewards.checked,
-    rewardsGranted: rewards.granted,
+    rewardsChecked,
+    rewardsGranted,
   };
 }
 
@@ -262,13 +270,21 @@ export async function reconcileDigitalPoolSystem(
 }> {
   const creds = await reconcileDigitalPoolCredentials(db, { take: options.take });
   const mergedNodes = await buildDigitalPoolNetworkAllLegsForReconcile(db);
-  const rewards = await tryGrantDigitalPoolL1RewardsForCompletedTree(db, mergedNodes);
+  let rewardsChecked = 0;
+  let rewardsGranted = 0;
+  try {
+    const rewards = await tryGrantDigitalPoolL1RewardsForCompletedTree(db, mergedNodes);
+    rewardsChecked = rewards.checked;
+    rewardsGranted = rewards.granted;
+  } catch (e) {
+    console.error("[reconcileDigitalPoolSystem] rewards", e);
+  }
 
   return {
     credentialsScanned: creds.scanned,
     credentialsCreated: creds.created,
     credentialsSynced: creds.synced,
-    rewardsChecked: rewards.checked,
-    rewardsGranted: rewards.granted,
+    rewardsChecked,
+    rewardsGranted,
   };
 }

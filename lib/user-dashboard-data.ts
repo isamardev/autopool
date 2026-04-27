@@ -9,6 +9,7 @@ import {
 } from "@/lib/user-withdraw-history";
 import {
   applyAutoWithdrawSuspendIfStaleForUser,
+  tryRepairAutoWithdrawSuspendFromDownlineProof,
   secondsRemainingInTeamActivityWindow,
   TEAM_INACTIVITY_DAYS,
 } from "@/lib/team-withdraw-activity";
@@ -18,6 +19,7 @@ import { ensureDigitalPoolCredentialAndPayload } from "@/lib/digital-pool-creden
 import { MIN_DIGITAL_POOL_NETWORK_BINARY_LEVEL } from "@/lib/digital-pool-network-config";
 import { buildDigitalPoolNetworkResponse } from "@/lib/digital-pool-network-tree";
 import { tryGrantDigitalPoolL1RewardsForCompletedTree } from "@/lib/digital-pool-l1-reward";
+import { reconcileDigitalPoolWithdrawBalanceFromSeatRewards, getDigitalPoolTotalIncomeUsd } from "@/lib/digital-pool-withdraw-balance-reconcile";
 import { TREE_QUERY_MAX_DEPTH } from "@/lib/tree-display";
 
 const REFERRAL_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -77,6 +79,12 @@ export type UserDashboardPayload = {
     eligibleLegs?: number;
     error?: string;
   };
+  /**
+   * Digital Pool panel stats — all-time pool-wallet credits (``adjustment`` rows) and
+   * approved withdrawals sourced from the pool wallet (`grossRequested` or `amount`).
+   */
+  digitalPoolTotalIncome: number;
+  digitalPoolTotalWithdraw: number;
 };
 
 export async function getUserDashboardPayload(
@@ -89,6 +97,11 @@ export async function getUserDashboardPayload(
   const now = new Date();
   const nowMs = now.getTime();
 
+  try {
+    await tryRepairAutoWithdrawSuspendFromDownlineProof(db, userId);
+  } catch (e) {
+    console.error("getUserDashboardPayload: tryRepairAutoWithdrawSuspendFromDownlineProof", e);
+  }
   await applyAutoWithdrawSuspendIfStaleForUser(db, userId);
 
   let digitalPoolL1Reward: UserDashboardPayload["digitalPoolL1Reward"];
@@ -146,6 +159,8 @@ export async function getUserDashboardPayload(
     return { success: false, status: 404, error: "User not found" };
   }
 
+  const digitalPoolWithdrawBalance = await reconcileDigitalPoolWithdrawBalanceFromSeatRewards(db, user.id);
+
   const withdrawBalance = Number(user.withdrawBalance ?? 0);
   const usdtBalance = Number(user.usdtBalance ?? 0);
   let permanentWithdrawAddress: string | null = user.permanentWithdrawAddress ?? null;
@@ -167,19 +182,17 @@ export async function getUserDashboardPayload(
 
   const {
     adminRoleId: _adminRoleId,
-    digitalPoolWithdrawBalance: _dpBalRaw,
+    digitalPoolWithdrawBalance: _dpBalIgnored,
     digitalPoolL1RewardGrantedAt: _dpL1Raw,
     ...userRest
   } = user;
   void _adminRoleId;
-  void _dpBalRaw;
+  void _dpBalIgnored;
   void _dpL1Raw;
 
   const uext = user as typeof user & {
-    digitalPoolWithdrawBalance?: unknown;
     digitalPoolL1RewardGrantedAt?: Date | null;
   };
-  const digitalPoolWithdrawBalance = Number(uext.digitalPoolWithdrawBalance ?? 0);
   const digitalPoolL1RewardGrantedAt = uext.digitalPoolL1RewardGrantedAt
     ? uext.digitalPoolL1RewardGrantedAt.toISOString()
     : null;
@@ -257,6 +270,8 @@ export async function getUserDashboardPayload(
     chainWithdrawalTotal,
     internalTransferTotal,
     downlineByDepthRows,
+    digitalPoolIncomeAgg,
+    digitalPoolWithdrawTotalRaw,
   ] = await Promise.all([
     db.user.count({
       where: { referredById: userId, status: { in: ["active", "withdraw_suspend"] } },
@@ -308,7 +323,48 @@ export async function getUserDashboardPayload(
       GROUP BY depth
       ORDER BY depth ASC
     `),
+    db.transaction.aggregate({
+      where: {
+        userId,
+        type: "adjustment",
+        amount: { gt: 0 },
+        AND: [
+          { note: { startsWith: "Digital Pool " } },
+          { NOT: { note: { startsWith: "Digital Pool withdrawal" } } },
+        ],
+      },
+      _sum: { amount: true },
+    }),
+    (async (): Promise<number> => {
+      try {
+        const rows = await db.$queryRaw<Array<{ v: unknown }>>(
+          Prisma.sql`
+          SELECT COALESCE(SUM(COALESCE("grossRequested", amount)), 0) AS v
+          FROM "Withdrawal"
+          WHERE "userId" = ${userId} AND status = 'approved' AND "digitalPoolSource" = true
+        `,
+        );
+        return Number(rows[0]?.v ?? 0);
+      } catch {
+        try {
+          const agg = await db.withdrawal.aggregate({
+            where: { userId, status: "approved", digitalPoolSource: true },
+            _sum: { amount: true },
+          });
+          return Number(agg._sum.amount ?? 0);
+        } catch {
+          return 0;
+        }
+      }
+    })(),
   ]);
+
+  const digitalPoolTotalIncome = await getDigitalPoolTotalIncomeUsd(
+    db,
+    userId,
+    Number(digitalPoolIncomeAgg._sum.amount ?? 0),
+  );
+  const digitalPoolTotalWithdraw = Number(digitalPoolWithdrawTotalRaw.toFixed(2));
 
   const commissionTotal = Number(commissionAllAgg._sum.amount ?? 0);
   const commissionToday = Number(commissionTodayAgg._sum.amount ?? 0);
@@ -359,6 +415,8 @@ export async function getUserDashboardPayload(
     commissionToday,
     referralGate,
     digitalPoolSystem,
+    digitalPoolTotalIncome,
+    digitalPoolTotalWithdraw,
     ...(digitalPoolL1Reward ? { digitalPoolL1Reward } : {}),
   };
 

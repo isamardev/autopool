@@ -16,6 +16,9 @@ export type PoolDashboardSnapshot = {
   withdrawalTotal: number;
   commissionTotal: number;
   commissionToday: number;
+  /** Pool-wallet credits (rewards) and approved DP withdrawals — see `getUserDashboardPayload`. */
+  digitalPoolTotalIncome: number;
+  digitalPoolTotalWithdraw: number;
   refStats: { total: number; levels: Record<string, number> } | null;
 };
 
@@ -56,6 +59,8 @@ export function usePoolDashboard() {
           withdrawalTotal: Number(dash?.withdrawalTotal ?? 0),
           commissionTotal: Number(dash?.commissionTotal ?? 0),
           commissionToday: Number(dash?.commissionToday ?? 0),
+          digitalPoolTotalIncome: Number(dash?.digitalPoolTotalIncome ?? 0),
+          digitalPoolTotalWithdraw: Number(dash?.digitalPoolTotalWithdraw ?? 0),
           refStats,
         });
       } else {

@@ -6,7 +6,7 @@ import { runActivationPayoutEngine } from "@/lib/mlm-logic";
 import {
   reconcileDigitalPoolAfterTeamChange,
 } from "@/lib/digital-pool-credential-db";
-import { MANUAL_SUSPEND_SOURCE } from "@/lib/team-withdraw-activity";
+import { MANUAL_SUSPEND_SOURCE, onNewMemberRegistered } from "@/lib/team-withdraw-activity";
 
 function countsTowardBinaryTree(status: string): boolean {
   return status !== "inactive";
@@ -56,6 +56,11 @@ export async function PATCH(req: Request) {
           where: { id: parsed.data.id },
           data: { lastDownlineActivityAt: new Date(), withdrawSuspendSource: null },
         });
+        try {
+          await onNewMemberRegistered(db, parsed.data.id);
+        } catch (hookErr) {
+          console.error("admin users/status: team withdraw activity hook failed", hookErr);
+        }
       } else {
         await db.user.update({
           where: { id: parsed.data.id },

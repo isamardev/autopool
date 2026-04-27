@@ -5,7 +5,10 @@ import { getUserApiContext } from "@/lib/user-api-auth";
 import { Prisma } from "@prisma/client";
 import { MIN_WITHDRAW_OR_P2P_USDT, WITHDRAW_FEE_PERCENT, withdrawNetAfterFee } from "@/lib/wallet-limits";
 import { splitWithdrawalFeeToCharityAndFeePool } from "@/lib/platform-fee-split";
-import { applyAutoWithdrawSuspendIfStaleForUser } from "@/lib/team-withdraw-activity";
+import {
+  applyAutoWithdrawSuspendIfStaleForUser,
+  tryRepairAutoWithdrawSuspendFromDownlineProof,
+} from "@/lib/team-withdraw-activity";
 
 const schema = z.object({
   amount: z.number().positive(),
@@ -34,6 +37,11 @@ export async function POST(req: Request) {
     const userId = ctx.userId;
     const { amount, address, securityCode } = parsed.data;
 
+    try {
+      await tryRepairAutoWithdrawSuspendFromDownlineProof(db, userId);
+    } catch (e) {
+      console.error("withdraw-request: tryRepairAutoWithdrawSuspendFromDownlineProof", e);
+    }
     await applyAutoWithdrawSuspendIfStaleForUser(db, userId);
 
     const user = await db.user.findUnique({ where: { id: userId } });

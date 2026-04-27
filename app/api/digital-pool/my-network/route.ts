@@ -11,6 +11,20 @@ import {
   viewerMeetsDigitalPoolL1CompletionRule,
 } from "@/lib/digital-pool-l1-reward";
 
+/** User-facing hint when reward sync fails (stale Prisma client or missing migration). */
+function formatDigitalPoolRewardSyncErrorMessage(raw: string): string {
+  if (/Cannot read properties of undefined \(reading ['"]findMany['"]\)/.test(raw)) {
+    return "Reward sync: Prisma client is missing the Digital Pool seat table (digitalPoolSeatReward). On the server run: npm run db:generate, fully restart the process, then npm run db:migrate:deploy.";
+  }
+  if (/Prisma client missing digitalPoolSeatReward/i.test(raw)) {
+    return "Reward sync: Prisma client is missing digitalPoolSeatReward. On the server run: npm run db:generate, fully restart the process, then npm run db:migrate:deploy.";
+  }
+  if (/does not exist|doesn't exist|relation .+ does not exist|P2021|42P01|Table .+ not found/i.test(raw)) {
+    return `${raw} If this mentions a missing table, on the server run: npm run db:migrate:deploy.`;
+  }
+  return raw;
+}
+
 export async function GET() {
   try {
     const jar = await cookies();
@@ -48,12 +62,24 @@ export async function GET() {
     // Single idempotent function handles ALL completions (own position + funded entries).
     // Uses digitalPoolRewardGrantedCount to track how many $100 rewards have been granted.
     const rewardCountBefore = user.digitalPoolRewardGrantedCount ?? 0;
-    const completedTreeRewards = await tryGrantDigitalPoolL1RewardsForCompletedTree(db, nodes);
+    let completedTreeRewards: Awaited<ReturnType<typeof tryGrantDigitalPoolL1RewardsForCompletedTree>> | null = null;
+    let rewardSyncError: string | null = null;
+    try {
+      // Fresh singleton: avoids a disconnected/stale `db` if another request recycled the global client mid-flight.
+      const dbForRewards = getDb();
+      completedTreeRewards = await tryGrantDigitalPoolL1RewardsForCompletedTree(dbForRewards, nodes);
+    } catch (reErr) {
+      const raw = reErr instanceof Error ? reErr.message : String(reErr);
+      rewardSyncError = formatDigitalPoolRewardSyncErrorMessage(raw);
+      console.error("digital-pool/my-network reward sync:", reErr);
+    }
     const userAfter = await db.user.findUnique({
       where: { id: session.userId },
       select: { digitalPoolRewardGrantedCount: true },
     });
-    const viewerGrantedNow = (userAfter?.digitalPoolRewardGrantedCount ?? 0) > rewardCountBefore;
+    const viewerGrantedNow =
+      completedTreeRewards != null &&
+      (userAfter?.digitalPoolRewardGrantedCount ?? 0) > rewardCountBefore;
 
     return NextResponse.json({
       nodes,
@@ -64,8 +90,14 @@ export async function GET() {
       poolLegRootId,
       viewerPoolMemberId: session.userId,
       minBinaryLevel: MIN_DIGITAL_POOL_NETWORK_BINARY_LEVEL,
-      digitalPoolL1Reward: { granted: viewerGrantedNow, alreadyGranted: !viewerGrantedNow },
+      digitalPoolL1Reward: {
+        granted: viewerGrantedNow,
+        alreadyGranted:
+          !viewerGrantedNow &&
+          (Boolean(user.digitalPoolL1RewardGrantedAt) || rewardCountBefore > 0),
+      },
       digitalPoolCompletedTreeRewards: completedTreeRewards,
+      rewardSyncError,
       digitalPoolCascadedSlots: getDigitalPoolCascadedSlotSummary(nodes),
       viewerDigitalPoolL1Complete,
       digitalPoolEligibleLegs: poolLegs,
@@ -73,6 +105,10 @@ export async function GET() {
     });
   } catch (e) {
     console.error("digital-pool/my-network:", e);
-    return NextResponse.json({ error: "Failed to load network" }, { status: 500 });
+    const details = e instanceof Error ? e.message : String(e);
+    return NextResponse.json(
+      { error: "Failed to load network", details },
+      { status: 500 },
+    );
   }
 }

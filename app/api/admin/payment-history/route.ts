@@ -83,9 +83,11 @@ export async function GET(req: Request) {
       if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
+      const digitalPoolOnly =
+        url.searchParams.get("digitalPool") === "1" || url.searchParams.get("digitalPool") === "true";
       /** Super admin / full access: all rows. Staff: only withdrawals they approved or rejected. */
       const staffScoped = session.user.adminFullAccess !== true;
-      const where = staffScoped
+      const scopeWhere = staffScoped
         ? {
             OR: [
               { approvedByUserId: session.user.id },
@@ -93,6 +95,12 @@ export async function GET(req: Request) {
             ],
           }
         : {};
+      const where =
+        digitalPoolOnly && staffScoped
+          ? { AND: [{ digitalPoolSource: true }, scopeWhere] }
+          : digitalPoolOnly
+            ? { digitalPoolSource: true }
+            : scopeWhere;
 
       const items = await withWithdrawalColumnRetry(db, () =>
         db.withdrawal.findMany({

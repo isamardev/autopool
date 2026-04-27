@@ -75,7 +75,14 @@ const ROLE_CHECKBOX_OPTIONS: { key: string; label: string }[] = [
   { key: "payments", label: "Payment History" },
 ];
 
-type AdminNavKey = NavItem["key"] | "payments" | "withdrawPending" | "withdrawHistory";
+type AdminNavKey =
+  | NavItem["key"]
+  | "payments"
+  | "withdrawPending"
+  | "withdrawHistory"
+  | "digitalPoolWithdrawPending"
+  | "digitalPoolUsers"
+  | "digitalPoolWithdrawHistory";
 
 function ConfirmationModal({
   message,
@@ -413,6 +420,12 @@ export function AdminPanelClient() {
   const [withdrawSectionOpen, setWithdrawSectionOpen] = useState(false);
   const [withdrawHistoryItems, setWithdrawHistoryItems] = useState<any[]>([]);
   const [withdrawHistoryLoading, setWithdrawHistoryLoading] = useState(false);
+  const [digitalPoolSectionOpen, setDigitalPoolSectionOpen] = useState(false);
+  const [pendingPoolWithdrawals, setPendingPoolWithdrawals] = useState<any[]>([]);
+  const [poolWithdrawHistoryItems, setPoolWithdrawHistoryItems] = useState<any[]>([]);
+  const [poolWithdrawHistoryLoading, setPoolWithdrawHistoryLoading] = useState(false);
+  const [poolUserCount, setPoolUserCount] = useState<number | null>(null);
+  const [poolUserCountLoading, setPoolUserCountLoading] = useState(false);
   const [deposits, setDeposits] = useState<any[]>([]);
   const [depositStatus, setDepositStatus] = useState<string>("all");
   const [userStatusFilter, setUserStatusFilter] = useState<string>("all");
@@ -494,6 +507,8 @@ export function AdminPanelClient() {
     [canAdminSection],
   );
 
+  const canAccessDigitalPoolAdmin = canAdminSection("withdrawals") || canAdminSection("payments");
+
   const firstAllowedTab = useMemo(() => {
     const order: AdminNavKey[] = [
       "overview",
@@ -501,6 +516,10 @@ export function AdminPanelClient() {
       "deposits",
       "settings",
       "withdrawPending",
+      "withdrawHistory",
+      "digitalPoolWithdrawPending",
+      "digitalPoolUsers",
+      "digitalPoolWithdrawHistory",
       "payments",
       "roles",
     ];
@@ -508,6 +527,13 @@ export function AdminPanelClient() {
       if (k === "withdrawPending") return canAdminSection("withdrawals");
       if (k === "withdrawHistory")
         return canAdminSection("withdrawals") || canAdminSection("payments");
+      if (
+        k === "digitalPoolWithdrawPending" ||
+        k === "digitalPoolUsers" ||
+        k === "digitalPoolWithdrawHistory"
+      ) {
+        return canAdminSection("withdrawals") || canAdminSection("payments");
+      }
       if (k === "payments") return canAdminSection("payments");
       return canAdminSection(k);
     });
@@ -517,6 +543,16 @@ export function AdminPanelClient() {
   useEffect(() => {
     if (active === "withdrawPending" || active === "withdrawHistory") {
       setWithdrawSectionOpen(true);
+    }
+  }, [active]);
+
+  useEffect(() => {
+    if (
+      active === "digitalPoolWithdrawPending" ||
+      active === "digitalPoolUsers" ||
+      active === "digitalPoolWithdrawHistory"
+    ) {
+      setDigitalPoolSectionOpen(true);
     }
   }, [active]);
 
@@ -537,6 +573,18 @@ export function AdminPanelClient() {
       if (!okWithdrawTab) {
         if (firstAllowedTab) setActive(firstAllowedTab);
         setWithdrawSectionOpen(false);
+      }
+      return;
+    }
+    if (
+      active === "digitalPoolWithdrawPending" ||
+      active === "digitalPoolUsers" ||
+      active === "digitalPoolWithdrawHistory"
+    ) {
+      const ok = can("withdrawals") || can("payments");
+      if (!ok) {
+        if (firstAllowedTab) setActive(firstAllowedTab);
+        setDigitalPoolSectionOpen(false);
       }
       return;
     }
@@ -629,6 +677,7 @@ export function AdminPanelClient() {
     setPaymentHistoryKind(kind);
     setPaymentHistoryOpen(true);
     setWithdrawSectionOpen(false);
+    setDigitalPoolSectionOpen(false);
     setMobileNavOpen(false);
   }, []);
 
@@ -694,6 +743,19 @@ export function AdminPanelClient() {
         );
       }
 
+      if (can("withdrawals") || can("payments")) {
+        jobs.push(
+          (async () => {
+            const poolWRes = await fetch("/api/admin/withdrawals?digitalPool=1", { cache: "no-store" });
+            if (poolWRes.ok) {
+              const data = await poolWRes.json();
+              setPendingPoolWithdrawals(data.items || []);
+            } else {
+              setPendingPoolWithdrawals([]);
+            }
+          })(),
+        );
+      }
       if (can("withdrawals")) {
         jobs.push(
           (async () => {
@@ -802,6 +864,50 @@ export function AdminPanelClient() {
     [session?.user?.id, status],
   );
 
+  const fetchPoolWithdrawHistory = useCallback(
+    async (silent = false) => {
+      if (status !== "authenticated" || !session?.user?.id) return;
+      if (!silent) setPoolWithdrawHistoryLoading(true);
+      try {
+        const res = await fetch("/api/admin/payment-history?type=withdrawals&digitalPool=1", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && Array.isArray(data.items)) {
+          setPoolWithdrawHistoryItems(data.items);
+        } else {
+          setPoolWithdrawHistoryItems([]);
+          console.error("[admin digital pool withdraw history]", res.status, data);
+        }
+      } catch (e) {
+        setPoolWithdrawHistoryItems([]);
+        console.error("[admin digital pool withdraw history] fetch failed", e);
+      } finally {
+        if (!silent) setPoolWithdrawHistoryLoading(false);
+      }
+    },
+    [session?.user?.id, status],
+  );
+
+  const fetchPoolUserCount = useCallback(
+    async (silent = false) => {
+      if (status !== "authenticated" || !session?.user?.id) return;
+      if (!silent) setPoolUserCountLoading(true);
+      try {
+        const res = await fetch("/api/admin/digital-pool-summary", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && typeof data?.totalPoolUsers === "number") {
+          setPoolUserCount(data.totalPoolUsers);
+        } else {
+          setPoolUserCount(null);
+        }
+      } catch {
+        setPoolUserCount(null);
+      } finally {
+        if (!silent) setPoolUserCountLoading(false);
+      }
+    },
+    [session?.user?.id, status],
+  );
+
   useEffect(() => {
     if (status !== "authenticated") return;
     if (!session?.user?.id || session.user.status !== "admin") return;
@@ -825,12 +931,28 @@ export function AdminPanelClient() {
   useEffect(() => {
     if (status !== "authenticated") return;
     if (!session?.user?.id) return;
+    if (active !== "digitalPoolWithdrawHistory") return;
+    fetchPoolWithdrawHistory(false).catch(() => undefined);
+  }, [active, fetchPoolWithdrawHistory, session?.user?.id, status]);
+
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    if (!session?.user?.id) return;
+    if (active !== "digitalPoolUsers") return;
+    fetchPoolUserCount(false).catch(() => undefined);
+  }, [active, fetchPoolUserCount, session?.user?.id, status]);
+
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    if (!session?.user?.id) return;
     const refresh = () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       fetchAdminDashboardData().catch(() => undefined);
       if (active === "users") fetchAdminUsers(true).catch(() => undefined);
       if (active === "payments") fetchPaymentHistory(true).catch(() => undefined);
       if (active === "withdrawHistory") fetchWithdrawHistory(true).catch(() => undefined);
+      if (active === "digitalPoolWithdrawHistory") fetchPoolWithdrawHistory(true).catch(() => undefined);
+      if (active === "digitalPoolUsers") fetchPoolUserCount(true).catch(() => undefined);
     };
     const id = window.setInterval(refresh, ADMIN_POLL_MS);
     const onVis = () => {
@@ -850,6 +972,8 @@ export function AdminPanelClient() {
     fetchAdminUsers,
     fetchPaymentHistory,
     fetchWithdrawHistory,
+    fetchPoolWithdrawHistory,
+    fetchPoolUserCount,
     session?.user?.id,
     status,
   ]);
@@ -984,6 +1108,7 @@ export function AdminPanelClient() {
                       setActive(item.key as AdminNavKey);
                       setPaymentHistoryOpen(false);
                       setWithdrawSectionOpen(false);
+                      setDigitalPoolSectionOpen(false);
                     }}
                     className={`flex items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
                       active === item.key ? "bg-muted text-foreground" : "text-subtext hover:bg-muted hover:text-foreground"
@@ -997,7 +1122,10 @@ export function AdminPanelClient() {
                   <div className="grid gap-1">
                     <button
                       type="button"
-                      onClick={() => setWithdrawSectionOpen((v) => !v)}
+                      onClick={() => {
+                        setWithdrawSectionOpen((v) => !v);
+                        setDigitalPoolSectionOpen(false);
+                      }}
                       className={`flex items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
                         active === "withdrawPending" || active === "withdrawHistory"
                           ? "bg-muted text-foreground"
@@ -1021,6 +1149,7 @@ export function AdminPanelClient() {
                               setActive("withdrawPending");
                               setWithdrawSectionOpen(true);
                               setPaymentHistoryOpen(false);
+                              setDigitalPoolSectionOpen(false);
                             }}
                             className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
                               active === "withdrawPending"
@@ -1038,6 +1167,7 @@ export function AdminPanelClient() {
                             setActive("withdrawHistory");
                             setWithdrawSectionOpen(true);
                             setPaymentHistoryOpen(false);
+                            setDigitalPoolSectionOpen(false);
                           }}
                           className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
                             active === "withdrawHistory"
@@ -1052,6 +1182,88 @@ export function AdminPanelClient() {
                     </div>
                   </div>
                 ) : null}
+                {canAccessDigitalPoolAdmin ? (
+                  <div className="grid gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDigitalPoolSectionOpen((v) => !v);
+                        setWithdrawSectionOpen(false);
+                        setPaymentHistoryOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
+                        active === "digitalPoolWithdrawPending" ||
+                        active === "digitalPoolUsers" ||
+                        active === "digitalPoolWithdrawHistory"
+                          ? "bg-muted text-foreground"
+                          : "text-subtext hover:bg-muted hover:text-foreground"
+                      }`}
+                      aria-expanded={digitalPoolSectionOpen}
+                    >
+                      <span>Digital Pool</span>
+                      <span className={`transition-transform ${digitalPoolSectionOpen ? "rotate-90" : ""}`}>›</span>
+                    </button>
+                    <div
+                      className={`ml-2 grid overflow-hidden transition-[grid-template-rows,opacity] duration-200 ${
+                        digitalPoolSectionOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                      }`}
+                    >
+                      <div className="min-h-0 overflow-hidden rounded-2xl bg-background ring-1 ring-ring">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActive("digitalPoolWithdrawPending");
+                            setDigitalPoolSectionOpen(true);
+                            setWithdrawSectionOpen(false);
+                            setPaymentHistoryOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
+                            active === "digitalPoolWithdrawPending"
+                              ? "bg-muted text-foreground"
+                              : "text-subtext hover:bg-muted hover:text-foreground"
+                          }`}
+                        >
+                          <span>Withdraw requests</span>
+                          {active === "digitalPoolWithdrawPending" ? <span className="text-primary">●</span> : null}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActive("digitalPoolUsers");
+                            setDigitalPoolSectionOpen(true);
+                            setWithdrawSectionOpen(false);
+                            setPaymentHistoryOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
+                            active === "digitalPoolUsers"
+                              ? "bg-muted text-foreground"
+                              : "text-subtext hover:bg-muted hover:text-foreground"
+                          }`}
+                        >
+                          <span>Total users</span>
+                          {active === "digitalPoolUsers" ? <span className="text-primary">●</span> : null}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActive("digitalPoolWithdrawHistory");
+                            setDigitalPoolSectionOpen(true);
+                            setWithdrawSectionOpen(false);
+                            setPaymentHistoryOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
+                            active === "digitalPoolWithdrawHistory"
+                              ? "bg-muted text-foreground"
+                              : "text-subtext hover:bg-muted hover:text-foreground"
+                          }`}
+                        >
+                          <span>Withdraw history</span>
+                          {active === "digitalPoolWithdrawHistory" ? <span className="text-primary">●</span> : null}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 {canAdminSection("payments") ? (
                 <div className="grid gap-1">
                   <button
@@ -1059,6 +1271,7 @@ export function AdminPanelClient() {
                     onClick={() => {
                       setPaymentHistoryOpen((v) => !v);
                       setWithdrawSectionOpen(false);
+                      setDigitalPoolSectionOpen(false);
                     }}
                     className={`flex items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
                       active === "payments" ? "bg-muted text-foreground" : "text-subtext hover:bg-muted hover:text-foreground"
@@ -1815,6 +2028,7 @@ export function AdminPanelClient() {
                                   setWithdrawMsg("Withdrawal rejected");
                                   toast.success("Withdrawal rejected");
                                   setPendingWithdrawals((prev) => prev.filter((x) => x.id !== w.id));
+                                  setPendingPoolWithdrawals((prev) => prev.filter((x) => x.id !== w.id));
                                 } catch (e) {
                                   console.error("[admin withdraw reject]", e);
                                   setWithdrawMsg(ADMIN_TOAST_GENERIC);
@@ -1894,6 +2108,204 @@ export function AdminPanelClient() {
                         ))}
                         {withdrawHistoryItems.length === 0 && (
                           <div className="px-4 py-8 text-center text-sm text-subtext">No data yet</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {active === "digitalPoolWithdrawPending" ? (
+              <div className="w-full max-w-full overflow-hidden rounded-3xl bg-card p-6 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)] sm:p-8">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Digital Pool — Withdraw requests</div>
+                    <div className="mt-1 text-sm text-subtext">Pending requests from the Digital Pool withdraw wallet only</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch("/api/admin/withdrawals?digitalPool=1", { cache: "no-store" });
+                        const data = await res.json();
+                        if (res.ok) setPendingPoolWithdrawals(data.items || []);
+                      } catch {}
+                    }}
+                    className="inline-flex items-center justify-center rounded-full bg-card px-5 py-2 text-sm font-medium text-foreground shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)] transition hover:bg-muted"
+                  >
+                    Refresh
+                  </button>
+                </div>
+                {withdrawMsg ? <div className="mt-3 rounded-2xl bg-card p-4 text-sm text-subtext ring-1 ring-ring">{withdrawMsg}</div> : null}
+                <div className="mt-6 overflow-x-auto rounded-2xl ring-1 ring-ring bg-card shadow-inner custom-scrollbar">
+                  <div className="min-w-[800px]">
+                    <div className="grid grid-cols-[1.6fr_1fr_1fr_1fr] gap-2 bg-muted/50 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-subtext border-b border-ring">
+                      <div>User</div>
+                      <div>Amount</div>
+                      <div>Address</div>
+                      <div className="text-center">Action</div>
+                    </div>
+                    <div className="divide-y divide-ring/50">
+                      {pendingPoolWithdrawals.map((w) => (
+                        <div key={w.id} className="grid grid-cols-[1.6fr_1fr_1fr_1fr] gap-2 px-4 py-4 text-sm">
+                          <div className="min-w-0 text-foreground">
+                            <div className="truncate font-medium">{w.user?.username ?? w.userId}</div>
+                            <div className="truncate text-xs text-subtext">{w.user?.email ?? "-"}</div>
+                          </div>
+                          <div className="text-foreground">{String(w.amount)}</div>
+                          <div className="break-all text-subtext">{w.address}</div>
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWithdrawMsg("");
+                                setWithdrawApproveHash("");
+                                setWithdrawApproveModal({
+                                  id: w.id,
+                                  username: String(w.user?.username ?? w.userId ?? ""),
+                                  email: String(w.user?.email ?? "-"),
+                                  amount: String(w.amount ?? ""),
+                                  address: String(w.address ?? ""),
+                                });
+                              }}
+                              className="inline-flex items-center justify-center rounded-full bg-primary px-3 py-1 text-xs text-white ring-1 ring-primary/20"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setWithdrawMsg("");
+                                try {
+                                  const res = await fetch("/api/admin/withdrawals", {
+                                    method: "PATCH",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ id: w.id, action: "reject" }),
+                                  });
+                                  const data = await res.json();
+                                  if (!res.ok) {
+                                    setWithdrawMsg(ADMIN_TOAST_GENERIC);
+                                    toastAdminApiError(data);
+                                    return;
+                                  }
+                                  setWithdrawMsg("Withdrawal rejected");
+                                  toast.success("Withdrawal rejected");
+                                  setPendingPoolWithdrawals((prev) => prev.filter((x) => x.id !== w.id));
+                                  setPendingWithdrawals((prev) => prev.filter((x) => x.id !== w.id));
+                                } catch (e) {
+                                  console.error("[admin withdraw reject]", e);
+                                  setWithdrawMsg(ADMIN_TOAST_GENERIC);
+                                  toast.error(ADMIN_TOAST_GENERIC);
+                                }
+                              }}
+                              className="inline-flex items-center justify-center rounded-full bg-card px-3 py-1 text-xs text-foreground ring-1 ring-ring"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {pendingPoolWithdrawals.length === 0 ? (
+                        <div className="px-4 py-8 text-center text-sm text-subtext">No pending Digital Pool withdrawal requests</div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {active === "digitalPoolUsers" ? (
+              <div className="w-full max-w-full overflow-hidden rounded-3xl bg-card p-6 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)] sm:p-8">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="text-sm text-subtext">Digital Pool</div>
+                    <div className="mt-1 text-lg font-semibold text-foreground">Total users</div>
+                    <div className="mt-1 text-sm text-subtext">
+                      Members with a Digital Pool login card created (see Digital Pool credential in the database).
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fetchPoolUserCount(false).catch(() => undefined)}
+                    className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-card px-5 text-sm font-medium text-foreground ring-1 ring-ring transition hover:bg-muted"
+                  >
+                    Refresh
+                  </button>
+                </div>
+                {poolUserCountLoading ? (
+                  <div className="mt-6 px-4 py-8 text-center text-sm text-subtext">Loading…</div>
+                ) : (
+                  <div className="mt-6 rounded-2xl border border-primary/25 bg-primary/5 px-6 py-8 text-center">
+                    <div className="text-xs font-medium uppercase tracking-wide text-subtext">Digital Pool members</div>
+                    <div className="mt-2 text-4xl font-bold tabular-nums text-primary">
+                      {poolUserCount != null ? poolUserCount : "—"}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {active === "digitalPoolWithdrawHistory" ? (
+              <div className="w-full max-w-full overflow-hidden rounded-3xl bg-card p-6 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)] sm:p-8">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="text-sm text-subtext">Digital Pool</div>
+                    <div className="mt-1 text-lg font-semibold text-foreground">Withdraw history</div>
+                    <div className="mt-1 text-sm text-subtext">
+                      Records where payout was requested from the Digital Pool wallet (`digitalPoolSource`).
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fetchPoolWithdrawHistory(false).catch(() => undefined)}
+                    className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-card px-5 text-sm font-medium text-foreground ring-1 ring-ring transition hover:bg-muted"
+                  >
+                    Refresh
+                  </button>
+                </div>
+                {poolWithdrawHistoryLoading ? (
+                  <div className="mt-6 px-4 py-8 text-center text-sm text-subtext">Loading…</div>
+                ) : (
+                  <div className="mt-6 overflow-x-auto rounded-2xl ring-1 ring-ring bg-card shadow-inner custom-scrollbar">
+                    <div className="min-w-[1120px]">
+                      <div className="grid grid-cols-[0.9fr_1fr_1fr_0.65fr_0.65fr_0.65fr_0.55fr_1fr] gap-2 bg-muted/50 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-subtext border-b border-ring">
+                        <div>Pay by</div>
+                        <div>Time</div>
+                        <div>User</div>
+                        <div>Net payout</div>
+                        <div>Gross</div>
+                        <div>Fee</div>
+                        <div>Status</div>
+                        <div>Address</div>
+                      </div>
+                      <div className="divide-y divide-ring/50">
+                        {poolWithdrawHistoryItems.map((row: any) => (
+                          <div
+                            key={row.id}
+                            className="grid grid-cols-[0.9fr_1fr_1fr_0.65fr_0.65fr_0.65fr_0.55fr_1fr] gap-2 px-4 py-3 text-sm"
+                          >
+                            <div className="font-medium text-foreground" title={String(row.payBy ?? "")}>
+                              {row.payBy != null && row.payBy !== "" ? row.payBy : "—"}
+                            </div>
+                            <div className="text-xs text-subtext">{new Date(row.at).toLocaleString()}</div>
+                            <div className="min-w-0">
+                              <div className="truncate font-medium">{row.user?.username}</div>
+                              <div className="truncate text-xs text-subtext">{row.user?.email}</div>
+                            </div>
+                            <div>{toUSD(Number(row.netPayout))}</div>
+                            <div className="text-subtext">
+                              {row.grossRequested != null ? toUSD(row.grossRequested) : "—"}
+                            </div>
+                            <div className="text-subtext">
+                              {row.feeAmount != null ? toUSD(row.feeAmount) : "—"}
+                            </div>
+                            <div className="text-xs">{row.status}</div>
+                            <div className="break-all text-xs text-subtext">{row.address}</div>
+                          </div>
+                        ))}
+                        {poolWithdrawHistoryItems.length === 0 && (
+                          <div className="px-4 py-8 text-center text-sm text-subtext">No Digital Pool withdrawal history yet</div>
                         )}
                       </div>
                     </div>
@@ -2210,6 +2622,7 @@ export function AdminPanelClient() {
                     setActive(item.key as AdminNavKey);
                     setPaymentHistoryOpen(false);
                     setWithdrawSectionOpen(false);
+                    setDigitalPoolSectionOpen(false);
                     setMobileNavOpen(false);
                   }}
                   className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
@@ -2224,7 +2637,10 @@ export function AdminPanelClient() {
                 <div className="mt-1 grid gap-1">
                   <button
                     type="button"
-                    onClick={() => setWithdrawSectionOpen((v) => !v)}
+                    onClick={() => {
+                      setWithdrawSectionOpen((v) => !v);
+                      setDigitalPoolSectionOpen(false);
+                    }}
                     className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
                       active === "withdrawPending" || active === "withdrawHistory"
                         ? "bg-muted text-foreground"
@@ -2248,6 +2664,7 @@ export function AdminPanelClient() {
                             setActive("withdrawPending");
                             setWithdrawSectionOpen(true);
                             setPaymentHistoryOpen(false);
+                            setDigitalPoolSectionOpen(false);
                             setMobileNavOpen(false);
                           }}
                           className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
@@ -2266,6 +2683,7 @@ export function AdminPanelClient() {
                           setActive("withdrawHistory");
                           setWithdrawSectionOpen(true);
                           setPaymentHistoryOpen(false);
+                          setDigitalPoolSectionOpen(false);
                           setMobileNavOpen(false);
                         }}
                         className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
@@ -2281,6 +2699,91 @@ export function AdminPanelClient() {
                   </div>
                 </div>
               ) : null}
+              {canAccessDigitalPoolAdmin ? (
+                <div className="mt-1 grid gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDigitalPoolSectionOpen((v) => !v);
+                      setWithdrawSectionOpen(false);
+                      setPaymentHistoryOpen(false);
+                    }}
+                    className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
+                      active === "digitalPoolWithdrawPending" ||
+                      active === "digitalPoolUsers" ||
+                      active === "digitalPoolWithdrawHistory"
+                        ? "bg-muted text-foreground"
+                        : "text-subtext hover:bg-muted hover:text-foreground"
+                    }`}
+                    aria-expanded={digitalPoolSectionOpen}
+                  >
+                    <span>Digital Pool</span>
+                    <span className={`transition-transform ${digitalPoolSectionOpen ? "rotate-90" : ""}`}>›</span>
+                  </button>
+                  <div
+                    className={`ml-2 grid overflow-hidden transition-[grid-template-rows,opacity] duration-200 ${
+                      digitalPoolSectionOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                    }`}
+                  >
+                    <div className="min-h-0 overflow-hidden rounded-2xl bg-background ring-1 ring-ring">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActive("digitalPoolWithdrawPending");
+                          setDigitalPoolSectionOpen(true);
+                          setWithdrawSectionOpen(false);
+                          setPaymentHistoryOpen(false);
+                          setMobileNavOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
+                          active === "digitalPoolWithdrawPending"
+                            ? "bg-muted text-foreground"
+                            : "text-subtext hover:bg-muted hover:text-foreground"
+                        }`}
+                      >
+                        <span>Withdraw requests</span>
+                        {active === "digitalPoolWithdrawPending" ? <span className="text-primary">●</span> : null}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActive("digitalPoolUsers");
+                          setDigitalPoolSectionOpen(true);
+                          setWithdrawSectionOpen(false);
+                          setPaymentHistoryOpen(false);
+                          setMobileNavOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
+                          active === "digitalPoolUsers"
+                            ? "bg-muted text-foreground"
+                            : "text-subtext hover:bg-muted hover:text-foreground"
+                        }`}
+                      >
+                        <span>Total users</span>
+                        {active === "digitalPoolUsers" ? <span className="text-primary">●</span> : null}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActive("digitalPoolWithdrawHistory");
+                          setDigitalPoolSectionOpen(true);
+                          setWithdrawSectionOpen(false);
+                          setPaymentHistoryOpen(false);
+                          setMobileNavOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm transition ${
+                          active === "digitalPoolWithdrawHistory"
+                            ? "bg-muted text-foreground"
+                            : "text-subtext hover:bg-muted hover:text-foreground"
+                        }`}
+                      >
+                        <span>Withdraw history</span>
+                        {active === "digitalPoolWithdrawHistory" ? <span className="text-primary">●</span> : null}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               {canAdminSection("payments") ? (
               <div className="mt-1 grid gap-1">
                 <button
@@ -2288,6 +2791,7 @@ export function AdminPanelClient() {
                   onClick={() => {
                     setPaymentHistoryOpen((v) => !v);
                     setWithdrawSectionOpen(false);
+                    setDigitalPoolSectionOpen(false);
                   }}
                   className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
                     active === "payments" ? "bg-muted text-foreground" : "text-subtext hover:bg-muted hover:text-foreground"
@@ -2860,6 +3364,7 @@ export function AdminPanelClient() {
               setWithdrawMsg("Withdrawal approved");
               toast.success("Withdrawal approved");
               setPendingWithdrawals((prev) => prev.filter((x) => x.id !== withdrawApproveModal.id));
+              setPendingPoolWithdrawals((prev) => prev.filter((x) => x.id !== withdrawApproveModal.id));
               setWithdrawApproveModal(null);
               setWithdrawApproveHash("");
             } catch (e) {

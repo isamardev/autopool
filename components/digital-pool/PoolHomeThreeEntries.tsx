@@ -211,7 +211,7 @@ export function PoolHomeThreeEntries({
   viewerUsername,
   viewerKey = "",
   viewerDirectReferrals = [],
-  poolNetworkInfo = { error: null, status: null },
+  poolNetworkInfo = { error: null, status: null, details: null },
   level1CompleteServerHint = false,
 }: {
   teamNodes: any[] | null;
@@ -220,7 +220,7 @@ export function PoolHomeThreeEntries({
   viewerKey?: string;
   viewerDirectReferrals?: any[];
   /** Set after /api/digital-pool/my-network returns — shows real errors instead of silent empty tree. */
-  poolNetworkInfo?: { error: string | null; status: number | null };
+  poolNetworkInfo?: { error: string | null; status: number | null; details?: string | null };
   /**
    * True when DB has `digitalPoolL1RewardGrantedAt` or my-network returned L1 reward granted/alreadyGranted.
    * Unlocks funded L2 + banner even if local tree leg count is wrong (dates/referredById JSON quirks).
@@ -234,7 +234,7 @@ export function PoolHomeThreeEntries({
   const level2LockedHint =
     "Pehle apna Digital Pool level 1 complete karein — 3 direct pool legs bharen; tab level 2 khule ga.";
 
-  const { viewerId, columns, level1Filled, level1Complete, treeLevel1Complete } = useMemo(() => {
+  const { viewerId, columns, treeLevel1Complete } = useMemo(() => {
     const emptyCols: ColumnModel[] = Array.from({ length: SLOTS_PER_NODE }, () => ({
       l1: null,
       l2: [null, null, null] as [any | null, any | null, any | null],
@@ -334,37 +334,13 @@ export function PoolHomeThreeEntries({
     return name || "First qualified user";
   }, [teamNodes]);
 
+  const showTree = Boolean(teamNodes && teamNodes.length > 0);
+
   return (
     <div className="rounded-2xl bg-card p-5 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)]">
-      <div className="text-sm font-semibold text-foreground">Digital Pool — 3 × 3 tree</div>
-      <p className="mt-2 max-w-2xl text-xs leading-relaxed text-subtext">
-        <span className="font-medium text-foreground">Har admin leg ka alag Digital Pool tree</span> — admin ke neeche jo
-        direct member ki line hai (aap ki &quot;leg&quot;), usi line ke L1+ qualified members is pool mein aate hain; doosri
-        leg ke log is tree mein nahi dikhte. Root woh user hai jis ne{" "}
-        <span className="font-medium text-foreground">is leg mein</span> sab se pehle level 1 qualify kiya.{" "}
-        <span className="font-medium text-foreground">Step 1 — User panel:</span> jis ka bhi{" "}
-        <span className="font-medium text-foreground">main plan level 1</span> complete ho jata hai (wahi “Level
-        Completed” / binary L1), woh member <span className="font-medium text-foreground">Digital Pool</span> network mein
-        shamil hota hai — bina is ke pool tree mein dikhega hi nahi.{" "}
-        <span className="font-medium text-foreground">Step 2 — Digital Pool:</span> pehla qualified member top/root par
-        aata hai; uske baad 2nd, 3rd, 4th qualified members uski{" "}
-        <span className="font-medium text-foreground">Positions 1–3</span> mein lagte hain. Phir tree 3-wide queue mein
-        aage fill hota hai. Har member ka Digital Pool level 1 = uske neeche{" "}
-        <span className="font-medium text-foreground">3 qualified pool legs</span>. Baqi khali jagah{" "}
-        <span className="font-medium text-foreground">pool legs</span>, phir{" "}
-        <span className="font-medium text-foreground">referral line</span>, phir bhi khali ho to{" "}
-        <span className="font-medium text-foreground">isi leg</span> ke L1+ members (placement order) — jo isi pool tree
-        mein hain magar seedha aap ke neeche pool link mein nahi, unka bhi naam aa sakta hai (e.g. Position 3).
-        Level 2 tab khulta hai jab <span className="font-medium text-foreground">aap</span> apna Digital Pool L1 complete
-        kar len. Jab aap ki {SLOTS_PER_NODE} pool legs bhar jati hain to total{" "}
-        <span className="font-medium text-foreground">${LEVEL1_COMPLETE_TOTAL_USD} USD</span> package:{" "}
-        <span className="font-medium text-foreground">$100</span> Digital Pool withdraw wallet, aur{" "}
-        <span className="font-medium text-foreground">$100 + $100</span> ki do entries{" "}
-        <span className="font-medium text-foreground">aap ki Position 1</span> ke neeche (Level 2 row).         Root hamesha is leg ka pehla qualified member rahega; personal reward aapke naam se wallet aur funded entries mein
-        dikhega.
-      </p>
+      <div className="text-sm font-semibold text-foreground">Digital pool tree</div>
 
-      {loading && !level1CompleteServerHint ? (
+      {loading ? (
         <div className="mt-6 text-sm text-subtext">Loading tree…</div>
       ) : (
         <div className="mt-6">
@@ -374,6 +350,21 @@ export function PoolHomeThreeEntries({
               {poolNetworkInfo.status != null ? ` (HTTP ${poolNetworkInfo.status})` : ""}. Session / login check karein —
               aksar iska matlab <span className="font-medium">Digital Pool dubara login</span> ya{" "}
               <span className="font-medium">AUTH_SECRET</span> server par set nahi.
+              {poolNetworkInfo.details ? (
+                <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-background/60 px-2 py-1.5 text-left text-[11px] text-foreground ring-1 ring-ring">
+                  {poolNetworkInfo.details}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {!poolNetworkInfo.error && poolNetworkInfo.details ? (
+            <div className="mb-4 rounded-xl bg-amber-500/10 px-3 py-2 text-center text-xs text-foreground ring-1 ring-amber-500/30">
+              <span className="font-medium">Reward sync warning:</span>{" "}
+              <span className="whitespace-pre-wrap break-words">{poolNetworkInfo.details}</span>
+              <div className="mt-1.5 text-[10px] text-subtext">
+                Tree ab bhi load ho sakta hai. Agar message mein &quot;does not exist&quot; / table aaye to server par{" "}
+                <span className="font-medium">prisma migrate deploy</span> chalayein.
+              </div>
             </div>
           ) : null}
           {!poolNetworkInfo.error &&
@@ -395,31 +386,14 @@ export function PoolHomeThreeEntries({
               se level 1 complete karenge tab is leg ki queue mein next position par yahan dikhenge.
             </div>
           ) : null}
-          {loading && level1CompleteServerHint ? (
-            <div className="mb-3 text-center text-[11px] text-subtext">
-              Tree data load ho rahi hai — neeche Level 2 aap ke L1 reward ke hisaab se khula hua dikhe ga.
-            </div>
-          ) : null}
-          <div
-            className={`mb-4 rounded-xl px-3 py-2 text-center text-xs ring-1 ${
-              level1Complete ? "bg-primary/10 font-medium text-foreground ring-primary/25" : "bg-muted/50 text-subtext ring-ring"
-            }`}
-          >
-            {level1Complete
-              ? `Your level 1 complete — your ${SLOTS_PER_NODE} direct pool legs filled ($${LEVEL1_COMPLETE_TOTAL_USD} unlock)`
-              : `Your level 1: ${level1Filled}/${SLOTS_PER_NODE} direct pool legs · fill all ${SLOTS_PER_NODE} for your $${LEVEL1_COMPLETE_TOTAL_USD} unlock`}
-          </div>
-
+          {showTree ? (
+          <>
           <div className="flex flex-col items-center">
             <div className="w-full max-w-md rounded-2xl bg-primary/10 px-5 py-3 text-center ring-1 ring-primary/30">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-subtext">
                 Is leg ka pehla qualifier · root
               </div>
               <div className="mt-1 text-lg font-semibold text-foreground">{globalRootName}</div>
-              <div className="mt-2 text-xs leading-snug text-subtext">
-                Sirf isi referral line (leg) ke members is tree mein hain. Aapka naam apni actual position par dikhe ga,
-                root par tab hi jab aap pehle qualifier hon.
-              </div>
             </div>
 
             <div className="flex h-8 w-px bg-primary/35" aria-hidden />
@@ -518,83 +492,18 @@ export function PoolHomeThreeEntries({
             );
             })}
           </div>
-
-          {/* ── Full Global Queue ─────────────────────────────────── */}
-          {teamNodes && teamNodes.length > 0 ? (
-            <FullQueueSection teamNodes={teamNodes} />
+          </>
+          ) : !poolNetworkInfo.error &&
+          teamNodes &&
+          teamNodes.length === 0 &&
+          level1CompleteServerHint ? (
+            <div className="mt-4 text-center text-sm text-subtext">
+              Pool tree yahan tab dikhe ga jab is leg ka network data load ho jaye.
+            </div>
           ) : null}
 
         </div>
       )}
-    </div>
-  );
-}
-
-/** Shows every entry in global BFS placement order — real users + auto-funded entries — all depths. */
-function FullQueueSection({ teamNodes }: { teamNodes: any[] }) {
-  const sorted = useMemo(
-    () =>
-      [...(teamNodes ?? [])].sort((a, b) => {
-        const pa = Number(a.poolPlacementIndex ?? 0);
-        const pb = Number(b.poolPlacementIndex ?? 0);
-        if (pa !== pb) return pa - pb;
-        return String(a.id).localeCompare(String(b.id));
-      }),
-    [teamNodes],
-  );
-
-  const fundedCount = useMemo(() => sorted.filter((n) => Boolean(n.isFundedPlaceholder)).length, [sorted]);
-
-  if (sorted.length === 0) return null;
-
-  return (
-    <div className="mt-6 rounded-2xl bg-muted/30 p-4 ring-1 ring-ring">
-      <div className="mb-3 flex flex-wrap items-center gap-2 justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wide text-subtext">
-          Digital Pool — is leg ki queue (BFS order)
-        </span>
-        <div className="flex gap-2 flex-wrap">
-          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary ring-1 ring-primary/20">
-            {sorted.length} total entries
-          </span>
-          {fundedCount > 0 && (
-            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary ring-1 ring-primary/20">
-              {fundedCount} auto entries placed
-            </span>
-          )}
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-        {sorted.map((n, idx) => {
-          const isFunded = Boolean(n.isFundedPlaceholder);
-          const depth = Number(n.depth ?? 0);
-          const ownerName = isFunded
-            ? String(n.username ?? "").split("·")[0]?.trim() || "Member"
-            : null;
-          return (
-            <div
-              key={`q-${String(n.id)}-${idx}`}
-              className="rounded-xl px-2 py-2 ring-1 text-center bg-card ring-ring"
-            >
-              <div className="text-[9px] font-semibold uppercase tracking-wide text-subtext">
-                #{Number(n.poolPlacementIndex ?? idx + 1)} · Level {depth}
-              </div>
-              <div className="mt-0.5 truncate text-[11px] font-medium text-foreground">
-                {isFunded ? (
-                  <span className="text-primary">$100 Auto Entry</span>
-                ) : (
-                  String(n.username ?? "—")
-                )}
-              </div>
-              {isFunded && ownerName ? (
-                <div className="mt-0.5 text-[9px] text-subtext truncate">
-                  {ownerName} ki entry
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

@@ -16,14 +16,11 @@ import { poolApiFetch } from "@/lib/pool-api-fetch";
 import { usePoolDashboard } from "@/components/digital-pool/usePoolDashboard";
 import { PoolHomeThreeEntries } from "@/components/digital-pool/PoolHomeThreeEntries";
 
-const POOL_STAT_PLACEHOLDER_COUNT = 8;
-
-function EmptyPoolStatCard() {
+function PoolSummaryCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex min-h-[100px] flex-col rounded-2xl bg-card p-4 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)] sm:min-h-[112px] sm:p-5">
-      <div className="flex flex-1 items-center justify-center text-sm text-subtext/35" aria-hidden>
-        —
-      </div>
+    <div className="flex min-h-[100px] flex-col justify-center rounded-2xl bg-card p-4 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)] sm:min-h-[112px] sm:p-5">
+      <div className="text-xs font-medium uppercase tracking-wide text-subtext">{label}</div>
+      <div className="mt-2 text-lg font-bold tabular-nums text-foreground sm:text-xl">{value}</div>
     </div>
   );
 }
@@ -44,14 +41,21 @@ const poolWalletUsd = (n: number) =>
 
 export function PoolHomeHero() {
   const { snapshot, loading, refresh } = usePoolDashboard();
+  const poolIncomeTotal = Number(snapshot?.digitalPoolTotalIncome ?? 0);
+  const poolWithdrawTotal = Number(snapshot?.digitalPoolTotalWithdraw ?? 0);
   const [supportOpen, setSupportOpen] = useState(false);
   const [supportSubject, setSupportSubject] = useState("");
   const [supportMessage, setSupportMessage] = useState("");
   const [teamNodes, setTeamNodes] = useState<any[] | null>(null);
   const [viewerDirectReferrals, setViewerDirectReferrals] = useState<any[]>([]);
-  const [poolNetworkInfo, setPoolNetworkInfo] = useState<{ error: string | null; status: number | null }>({
+  const [poolNetworkInfo, setPoolNetworkInfo] = useState<{
+    error: string | null;
+    status: number | null;
+    details?: string | null;
+  }>({
     error: null,
     status: null,
+    details: null,
   });
   /** my-network said L1 reward already applied or granted this response — tree leg count can still look under 3 on the client. */
   const [poolL1DoneFromNetwork, setPoolL1DoneFromNetwork] = useState(false);
@@ -75,14 +79,22 @@ export function PoolHomeHero() {
             eligibleLegs?: number;
             rawDirectQualified?: number;
           };
+          rewardSyncError?: string;
+          details?: string;
           error?: string;
         };
         const msg = typeof data?.error === "string" ? data.error : "Request failed";
+        const errDetails = typeof data?.details === "string" ? data.details : null;
 
         if (res.ok && Array.isArray(data?.nodes)) {
           setTeamNodes(data.nodes as any[]);
           setViewerDirectReferrals(Array.isArray(data?.viewerDirectReferrals) ? (data.viewerDirectReferrals as any[]) : []);
-          setPoolNetworkInfo({ error: null, status: res.status });
+          const syncWarn = typeof data.rewardSyncError === "string" ? data.rewardSyncError : null;
+          setPoolNetworkInfo({
+            error: null,
+            status: res.status,
+            details: syncWarn ?? null,
+          });
           const l1r = data.digitalPoolL1Reward;
           const legsFromApi =
             (typeof data.digitalPoolEligibleLegs === "number" && data.digitalPoolEligibleLegs >= 3) ||
@@ -106,17 +118,19 @@ export function PoolHomeHero() {
         } else {
           setTeamNodes([]);
           setViewerDirectReferrals([]);
-          setPoolNetworkInfo({ error: msg, status: res.status });
+          setPoolNetworkInfo({ error: msg, status: res.status, details: errDetails });
           toast.error(
             res.status === 401
               ? "Pool network: session khatam — /digital-pool/login se dubara login karein"
-              : `${msg} (HTTP ${res.status})`,
+              : errDetails
+                ? `${msg}: ${errDetails.slice(0, 120)}${errDetails.length > 120 ? "…" : ""}`
+                : `${msg} (HTTP ${res.status})`,
           );
         }
       } catch {
         setTeamNodes([]);
         setViewerDirectReferrals([]);
-        setPoolNetworkInfo({ error: "Network / server error", status: null });
+        setPoolNetworkInfo({ error: "Network / server error", status: null, details: null });
         toast.error("Pool network load nahi hui — page refresh ya connection check karein");
       }
     };
@@ -192,25 +206,11 @@ export function PoolHomeHero() {
           ))}
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-3 xs:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-          {Array.from({ length: POOL_STAT_PLACEHOLDER_COUNT }, (_, i) => (
-            <EmptyPoolStatCard key={i} />
-          ))}
+        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <PoolSummaryCard label="Withdraw wallet" value={poolWalletUsd(poolWithdrawBal)} />
+          <PoolSummaryCard label="Total income" value={poolWalletUsd(poolIncomeTotal)} />
+          <PoolSummaryCard label="Total withdraw" value={poolWalletUsd(poolWithdrawTotal)} />
         </div>
-      </div>
-
-      <div className="rounded-3xl bg-card p-5 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)] sm:p-6">
-        <div className="text-xs font-medium uppercase tracking-wide text-subtext">Digital Pool withdraw wallet</div>
-        <div className="mt-1 text-2xl font-bold text-foreground">
-          {poolWalletUsd(Number((profile as any)?.digitalPoolWithdrawBalance ?? 0))}
-        </div>
-        <p className="mt-2 max-w-2xl text-xs leading-relaxed text-subtext">
-          Digital Pool level 1 complete par total <span className="font-medium text-foreground">$300</span> package:{" "}
-          <span className="font-medium text-foreground">$100</span> yahan Digital Pool withdraw wallet mein (main panel
-          wallet se alag), aur <span className="font-medium text-foreground">$100 + $100</span> ki do entries{" "}
-          <span className="font-medium text-foreground">aap ki Position 1</span> ke neeche tree mein. Withdraw yahi balance
-          se — <span className="font-medium text-foreground">Withdraw</span> page.
-        </p>
       </div>
 
       <PoolHomeThreeEntries

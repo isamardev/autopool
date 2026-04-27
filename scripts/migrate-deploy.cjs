@@ -36,9 +36,12 @@ async function main() {
   }
   if (!process.env.DIRECT_DATABASE_URL) {
     console.error("[migrate-deploy] Missing DIRECT_DATABASE_URL after prepare.");
+    console.error("  → Use this script (it derives direct URL from Neon pooled DATABASE_URL): npm run db:migrate:deploy");
+    console.error("  → Do not use raw `npx prisma migrate deploy` unless DIRECT_DATABASE_URL is set in .env.");
     process.exit(1);
   }
 
+  console.log("[migrate-deploy] migrate uses directUrl for advisory locks (Neon non-pooler host).");
   const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const r = runPrisma(["migrate", "deploy"]);

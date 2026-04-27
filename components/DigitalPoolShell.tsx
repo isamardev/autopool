@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "react-toastify";
 import { FaSignOutAlt, FaUserCircle } from "react-icons/fa";
 import type { DigitalPoolSessionPayload } from "@/lib/digital-pool-session";
 
@@ -31,6 +32,17 @@ export function DigitalPoolShell({
   useEffect(() => {
     if (pathname.startsWith("/digital-pool/profile")) setProfileOpen(true);
   }, [pathname]);
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("digital_pool_welcome_toast") === "1") {
+        sessionStorage.removeItem("digital_pool_welcome_toast");
+        toast.success("Welcome");
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const initials = useMemo(() => {
     const name = session.username ?? "";

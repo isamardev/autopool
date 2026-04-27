@@ -15,7 +15,7 @@ export function PoolIncomeClient() {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await poolApiFetch("/api/user/commissions", { cache: "no-store" });
+        const res = await poolApiFetch("/api/user/commissions?digitalPool=1", { cache: "no-store" });
         const data = await res.json();
         if (res.ok && Array.isArray(data?.items)) setItems(data.items);
         else setItems([]);
@@ -39,7 +39,7 @@ export function PoolIncomeClient() {
   return (
     <div className="overflow-hidden rounded-3xl bg-card p-6 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)]">
       <div className="text-sm font-semibold">Income History</div>
-      <div className="mt-1 text-xs text-subtext">Commission credits (newest first)</div>
+      <div className="mt-1 text-xs text-subtext">Digital Pool wallet credits — rewards & completions (newest first)</div>
       <div className="mt-4 max-h-[min(70vh,480px)] overflow-auto rounded-2xl ring-1 ring-ring custom-scrollbar">
         <div className="divide-y divide-[color:var(--ring)]">
           {items.length === 0 ? (

@@ -5,8 +5,12 @@ import { getUserApiContext } from "@/lib/user-api-auth";
 import { Prisma } from "@prisma/client";
 import { MIN_WITHDRAW_OR_P2P_USDT, WITHDRAW_FEE_PERCENT, withdrawNetAfterFee } from "@/lib/wallet-limits";
 import { splitWithdrawalFeeToCharityAndFeePool } from "@/lib/platform-fee-split";
-import { applyAutoWithdrawSuspendIfStaleForUser } from "@/lib/team-withdraw-activity";
+import {
+  applyAutoWithdrawSuspendIfStaleForUser,
+  tryRepairAutoWithdrawSuspendFromDownlineProof,
+} from "@/lib/team-withdraw-activity";
 import { DIGITAL_POOL_API_HEADER } from "@/lib/digital-pool-api-constants";
+import { reconcileDigitalPoolWithdrawBalanceFromSeatRewards } from "@/lib/digital-pool-withdraw-balance-reconcile";
 
 /** Same as `/api/user/withdraw-request`: pending until admin approves (with tx hash) or rejects (refund). */
 const schema = z.object({
@@ -37,13 +41,21 @@ export async function POST(req: Request) {
     const { amount, address, securityCode } = parsed.data;
     const fromDigitalPoolWallet = req.headers.get(DIGITAL_POOL_API_HEADER) === "1";
 
-    await applyAutoWithdrawSuspendIfStaleForUser(db, userId);
+    if (!fromDigitalPoolWallet) {
+      try {
+        await tryRepairAutoWithdrawSuspendFromDownlineProof(db, userId);
+      } catch (e) {
+        console.error("withdraw-demo: tryRepairAutoWithdrawSuspendFromDownlineProof", e);
+      }
+      await applyAutoWithdrawSuspendIfStaleForUser(db, userId);
+    }
 
     const user = await db.user.findUnique({ where: { id: userId } });
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
-    if (user.status === "withdraw_suspend") {
+    /** Main withdraw wallet: team inactivity / manual suspend. Digital Pool wallet is always allowed if balance & KYC fields pass. */
+    if (!fromDigitalPoolWallet && user.status === "withdraw_suspend") {
       return NextResponse.json(
         { error: "Withdrawals are suspended. Please contact customer support." },
         { status: 403 },
@@ -116,6 +128,9 @@ export async function POST(req: Request) {
       } catch {
         digitalPoolWithdrawBalance = 0;
       }
+    }
+    if (fromDigitalPoolWallet) {
+      digitalPoolWithdrawBalance = await reconcileDigitalPoolWithdrawBalanceFromSeatRewards(db, userId);
     }
 
     const gross = Number(amount.toFixed(2));

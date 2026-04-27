@@ -8,7 +8,8 @@ generator client {
   binaryTargets   = ["native"]
 }
 
-// Pooled `url` for app runtime (Neon pooler). `directUrl` for migrate/introspect — avoids P1002 advisory lock timeouts on pooler.
+// Neon: pooled `DATABASE_URL` for the app; `directUrl` for `migrate` / introspect (advisory locks fail on `-pooler`).
+// If `DIRECT_DATABASE_URL` is unset, `npm run db:migrate:deploy` / `scripts/prisma-setup.cjs` derive it (strip `-pooler.` from host).
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
@@ -72,6 +73,7 @@ model User {
   withdrawalsRejected Withdrawal[]   @relation("WithdrawalRejectedBy")
   digitalPoolAuditLogs DigitalPoolAuditLog[]
   digitalPoolCredential DigitalPoolCredential?
+  digitalPoolSeatRewards DigitalPoolSeatReward[]
 
   @@index([referredById])
   @@index([adminRoleId])
@@ -294,4 +296,16 @@ model DigitalPoolCredential {
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([email])
+}
+
+// One $100 L1 reward per pool seat (real user node id or synthetic funded node id). Same seat never pays twice.
+model DigitalPoolSeatReward {
+  seatNodeId  String   @id
+  ownerUserId String
+  amount      Decimal  @db.Decimal(18, 2)
+  grantedAt   DateTime @default(now())
+  owner       User     @relation(fields: [ownerUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([ownerUserId])
+  @@index([grantedAt])
 }

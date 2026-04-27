@@ -26,14 +26,20 @@ export default function DigitalPoolLoginPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(typeof data?.error === "string" ? data.error : "Login failed");
+        setBusy(false);
         return;
       }
-      toast.success("Welcome");
+      /** Welcome toast runs on panel after navigation — avoids toast-before-redirect. */
+      try {
+        sessionStorage.setItem("digital_pool_welcome_toast", "1");
+      } catch {
+        /* ignore */
+      }
       router.push("/digital-pool");
       router.refresh();
+      /* Keep busy until this tree unmounts so the button stays “Signing in…” and cannot double-submit. */
     } catch {
       toast.error("Login failed");
-    } finally {
       setBusy(false);
     }
   };
@@ -83,7 +89,8 @@ export default function DigitalPoolLoginPage() {
             <button
               type="submit"
               disabled={busy}
-              className="mt-1 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-primary px-5 text-sm font-medium text-white shadow-sm ring-1 ring-primary/20 transition hover:bg-primary/90 disabled:opacity-60"
+              aria-busy={busy}
+              className="mt-1 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-primary px-5 text-sm font-medium text-white shadow-sm ring-1 ring-primary/20 transition hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-70"
             >
               {busy ? "Signing in…" : "Sign in"}
             </button>

@@ -5,20 +5,33 @@ import { requireAdminSection } from "@/lib/admin-api-guard";
 import { ensureWithdrawalActorColumns, withWithdrawalColumnRetry } from "@/lib/withdrawal-ensure-column";
 import { Prisma } from "@prisma/client";
 
-export async function GET() {
+// GET /api/admin/withdrawals?digitalPool=1 — pending only, Digital Pool–sourced (see `UserWithdrawSection` + `digitalPoolSource` on `Withdrawal`)
+export async function GET(req: Request) {
   try {
+    const url = new URL(req.url);
+    const digitalPoolOnly = url.searchParams.get("digitalPool") === "1" || url.searchParams.get("digitalPool") === "true";
     const gate = await requireAdminSection("withdrawals");
-    if (!gate.ok) return gate.response;
+    if (!gate.ok) {
+      if (digitalPoolOnly) {
+        const gatePay = await requireAdminSection("payments");
+        if (!gatePay.ok) return gate.response;
+      } else {
+        return gate.response;
+      }
+    }
     const db = getDb();
     const items = await withWithdrawalColumnRetry(db, () =>
       db.withdrawal.findMany({
-        where: { status: "pending" },
+        where: {
+          status: "pending",
+          ...(digitalPoolOnly ? { digitalPoolSource: true } : {}),
+        },
         orderBy: { createdAt: "desc" },
         take: 200,
         include: { user: { select: { id: true, username: true, email: true, walletAddress: true } } },
       }),
     );
-    return NextResponse.json({ items });
+    return NextResponse.json({ items, digitalPoolOnly });
   } catch {
     return NextResponse.json({ error: "Failed to fetch withdrawals" }, { status: 500 });
   }

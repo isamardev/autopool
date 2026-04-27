@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { runTeamWithdrawAutoSuspendSweep } from "@/lib/team-withdraw-activity";
+import { runTeamWithdrawSuspendCycle } from "@/lib/team-withdraw-activity";
 
 /**
  * Periodic job: suspend withdrawals for active members with no new downline activation
@@ -14,8 +14,8 @@ export async function GET(req: Request) {
   }
   try {
     const db = getDb();
-    const { updated } = await runTeamWithdrawAutoSuspendSweep(db);
-    return NextResponse.json({ ok: true, updated });
+    const { restored, suspended } = await runTeamWithdrawSuspendCycle(db);
+    return NextResponse.json({ ok: true, restored, suspended, updated: suspended });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Cron failed";
     return NextResponse.json({ error: message }, { status: 500 });

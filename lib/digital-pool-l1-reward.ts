@@ -216,95 +216,196 @@ export async function tryGrantDigitalPoolL1Reward(
 }
 
 /**
- * Compute how many completed positions each real user owns across the entire tree.
- * A "completion" = a node (real or funded) whose slotsFilled >= 3.
- * For funded entries, the reward goes to fundedOwnerId (the real user behind them).
+ * Pool seats that have 3+ filled legs (real node: owner = node id; funded: owner = fundedOwnerId).
+ * Each seat pays at most once via {@link DigitalPoolSeatReward}.
  */
-function computeCompletionsByOwner(nodes: Array<Record<string, unknown>>): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const n of nodes) {
-    const filled = Number(n.slotsFilled ?? 0);
-    if (filled < 3) continue;
+function listCompletingSeats(nodes: Array<Record<string, unknown>>): Array<{ seatId: string; ownerUserId: string }> {
+  const eligible = nodes.filter((n) => Number(n.slotsFilled ?? 0) >= 3);
+  eligible.sort(sortPoolNodes);
+  const out: Array<{ seatId: string; ownerUserId: string }> = [];
+  const seen = new Set<string>();
+  for (const n of eligible) {
     const isFunded = Boolean(n.isFundedPlaceholder);
-    const ownerId = isFunded ? String(n.fundedOwnerId ?? n.id ?? "") : String(n.id ?? "");
-    if (!ownerId || isFunded && !n.fundedOwnerId) continue;
-    // Skip funded placeholders as owners — only real user IDs
+    const seatId = String(n.id ?? "");
+    if (!seatId || seen.has(seatId)) continue;
+    seen.add(seatId);
+    const ownerUserId = isFunded ? String(n.fundedOwnerId ?? "") : seatId;
+    if (!ownerUserId) continue;
     if (isFunded && !n.fundedOwnerId) continue;
-    map.set(ownerId, (map.get(ownerId) ?? 0) + 1);
+    out.push({ seatId, ownerUserId });
   }
-  return map;
+  return out;
+}
+
+function isPrismaUniqueViolation(e: unknown): boolean {
+  return (
+    e !== null &&
+    typeof e === "object" &&
+    "code" in e &&
+    (e as { code?: string }).code === "P2002"
+  );
 }
 
 /**
- * On each pool-network load, reconcile rewards for ALL completed nodes (real positions + funded entries).
- * Each completed position grants $100 to its real owner — tracked by digitalPoolRewardGrantedCount.
- * Idempotent: only grants the delta (completions − already granted count).
+ * Legacy payouts used only `digitalPoolRewardGrantedCount` (per owner). After introducing
+ * {@link DigitalPoolSeatReward}, insert seat rows for past grants so we do not pay those seats again —
+ * **no** wallet movement here.
+ */
+function assertDigitalPoolSeatRewardDelegate(db: PrismaClient): void {
+  const d = db as unknown as { digitalPoolSeatReward?: { findMany?: unknown } };
+  if (typeof d.digitalPoolSeatReward?.findMany !== "function") {
+    throw new Error(
+      "Prisma client missing digitalPoolSeatReward (run npm run db:generate, restart server, then npm run db:migrate:deploy).",
+    );
+  }
+}
+
+async function syncLegacySeatRewardRows(db: PrismaClient, nodes: Array<Record<string, unknown>>): Promise<void> {
+  assertDigitalPoolSeatRewardDelegate(db);
+  const seats = listCompletingSeats(nodes);
+  const byOwner = new Map<string, Array<{ seatId: string; ownerUserId: string }>>();
+  for (const s of seats) {
+    if (!byOwner.has(s.ownerUserId)) byOwner.set(s.ownerUserId, []);
+    byOwner.get(s.ownerUserId)!.push(s);
+  }
+
+  for (const [ownerId, list] of byOwner) {
+    const user = await db.user.findUnique({
+      where: { id: ownerId },
+      select: { digitalPoolRewardGrantedCount: true },
+    });
+    const claimed = user?.digitalPoolRewardGrantedCount ?? 0;
+    if (claimed <= 0) continue;
+
+    const existingRows = await db.digitalPoolSeatReward.findMany({
+      where: { ownerUserId: ownerId },
+      select: { seatNodeId: true },
+    });
+    const have = new Set(existingRows.map((r) => r.seatNodeId));
+    let need = claimed - have.size;
+    if (need <= 0) continue;
+
+    for (const { seatId, ownerUserId } of list) {
+      if (need <= 0) break;
+      if (have.has(seatId)) continue;
+      const rowExists = await db.digitalPoolSeatReward.findUnique({
+        where: { seatNodeId: seatId },
+        select: { seatNodeId: true },
+      });
+      if (rowExists) {
+        have.add(seatId);
+        continue;
+      }
+      try {
+        await db.digitalPoolSeatReward.create({
+          data: {
+            seatNodeId: seatId,
+            ownerUserId,
+            amount: new Prisma.Decimal(DIGITAL_POOL_L1_WITHDRAW_CREDIT_USD.toFixed(2)),
+          },
+        });
+        have.add(seatId);
+        need -= 1;
+      } catch (e) {
+        if (isPrismaUniqueViolation(e)) continue;
+        console.error("syncLegacySeatRewardRows", ownerId, seatId, e);
+      }
+    }
+  }
+}
+
+/**
+ * $100 + 2 entries are tied to one pool **seat** (tree node). When that seat’s 3 legs fill, pay once; deeper levels
+ * do not pay that seat again. New funded seats get their own first-time $100 when their 3 fill.
+ * Idempotent: table `DigitalPoolSeatReward` keyed by `seatNodeId`.
  */
 export async function tryGrantDigitalPoolL1RewardsForCompletedTree(
   db: PrismaClient,
   nodes: Array<Record<string, unknown>>,
   options: { maxGrantsPerRequest?: number } = {},
 ): Promise<{ checked: number; granted: number; newRewards: number; errors: number; completedUserIds: string[] }> {
-  const completionsByOwner = computeCompletionsByOwner(nodes);
-  const ownerIds = [...completionsByOwner.keys()];
+  await syncLegacySeatRewardRows(db, nodes);
+
+  const seats = listCompletingSeats(nodes);
   const max = Math.min(Math.max(options.maxGrantsPerRequest ?? 50, 1), 200);
+  const slice = seats.slice(0, max);
+  const seatIds = slice.map((s) => s.seatId);
+  const alreadyRewardedSeatIds =
+    seatIds.length > 0
+      ? new Set(
+          (
+            await db.digitalPoolSeatReward.findMany({
+              where: { seatNodeId: { in: seatIds } },
+              select: { seatNodeId: true },
+            })
+          ).map((r) => r.seatNodeId),
+        )
+      : new Set<string>();
+
   let granted = 0;
   let newRewards = 0;
   let errors = 0;
-  const completedUserIds: string[] = [];
+  const ownersWithNew = new Set<string>();
+  const credit = DIGITAL_POOL_L1_WITHDRAW_CREDIT_USD;
 
-  for (const ownerId of ownerIds.slice(0, max)) {
-    const totalCompletions = completionsByOwner.get(ownerId) ?? 0;
-    if (totalCompletions === 0) continue;
-
+  for (const { seatId, ownerUserId } of slice) {
+    if (alreadyRewardedSeatIds.has(seatId)) continue;
     try {
-      const user = await db.user.findUnique({
-        where: { id: ownerId },
-        select: { digitalPoolRewardGrantedCount: true, digitalPoolL1RewardGrantedAt: true },
-      });
-      if (!user) continue;
-
-      const alreadyGranted = user.digitalPoolRewardGrantedCount ?? 0;
-      const delta = totalCompletions - alreadyGranted;
-      if (delta <= 0) {
-        completedUserIds.push(ownerId);
-        continue;
-      }
-
-      const credit = DIGITAL_POOL_L1_WITHDRAW_CREDIT_USD * delta;
+      const userOk = await db.user.count({ where: { id: ownerUserId } });
+      if (!userOk) continue;
 
       await db.$transaction(async (tx) => {
-        await tx.user.update({
-          where: { id: ownerId },
+        await tx.digitalPoolSeatReward.create({
           data: {
-            digitalPoolWithdrawBalance: { increment: new Prisma.Decimal(credit.toFixed(2)) },
-            digitalPoolRewardGrantedCount: { increment: delta },
-            // Keep backward-compat timestamp for first reward
-            ...(user.digitalPoolL1RewardGrantedAt == null ? { digitalPoolL1RewardGrantedAt: new Date() } : {}),
+            seatNodeId: seatId,
+            ownerUserId,
+            amount: new Prisma.Decimal(credit.toFixed(2)),
           },
         });
 
+        const user = await tx.user.findUnique({
+          where: { id: ownerUserId },
+          select: { digitalPoolL1RewardGrantedAt: true },
+        });
+
+        await tx.user.update({
+          where: { id: ownerUserId },
+          data: {
+            digitalPoolWithdrawBalance: { increment: new Prisma.Decimal(credit.toFixed(2)) },
+            digitalPoolRewardGrantedCount: { increment: 1 },
+            ...(user?.digitalPoolL1RewardGrantedAt == null ? { digitalPoolL1RewardGrantedAt: new Date() } : {}),
+          },
+        });
+
+        const seatLabel = seatId.length > 48 ? `${seatId.slice(0, 45)}…` : seatId;
         await tx.transaction.create({
           data: {
-            userId: ownerId,
-            sourceUserId: ownerId,
+            userId: ownerUserId,
+            sourceUserId: ownerUserId,
             level: 0,
             amount: new Prisma.Decimal(credit.toFixed(2)),
             type: "adjustment",
-            note: `Digital Pool ${delta} position(s) complete — ${delta}×$${DIGITAL_POOL_L1_WITHDRAW_CREDIT_USD} = $${credit} pool withdraw wallet credit`,
+            note: `Digital Pool seat L1 complete (${seatLabel}) — $${credit} pool withdraw; 2×$100 entries via placement`,
           },
         });
       });
 
       granted += 1;
-      newRewards += delta;
-      completedUserIds.push(ownerId);
-      console.log(`[DigitalPool] Granted $${credit} to ${ownerId} — ${delta} new completion(s), total ${totalCompletions}`);
+      newRewards += 1;
+      ownersWithNew.add(ownerUserId);
+      console.log(`[DigitalPool] Seat reward $${credit} → owner ${ownerUserId} seat ${seatId}`);
     } catch (e) {
-      console.error(`tryGrantDigitalPoolL1RewardsForCompletedTree (${ownerId}):`, e);
+      if (isPrismaUniqueViolation(e)) continue;
+      console.error(`tryGrantDigitalPoolL1RewardsForCompletedTree seat ${seatId}:`, e);
       errors += 1;
     }
   }
 
-  return { checked: Math.min(ownerIds.length, max), granted, newRewards, errors, completedUserIds };
+  return {
+    checked: slice.length,
+    granted,
+    newRewards,
+    errors,
+    completedUserIds: [...ownersWithNew],
+  };
 }
