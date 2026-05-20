@@ -90,8 +90,8 @@ function getUserPanelL1CompletedAtMs(row: TeamRow, rows: TeamRow[]): number {
 }
 
 /**
- * Admin / company root ke neeche jis **direct** member ki line mein `userId` aata hai — Digital Pool usi leg ka alag tree hai.
- * Company root khud → null (koi leg nahi).
+ * Admin / company root ke neeche jis **direct** member ki referral line mein `userId` aata hai — reporting / `poolLegRootId` ke liye.
+ * Digital Pool tree ab global hai (sab legs ek queue). Company root khud → null.
  */
 export function getDigitalPoolLegRootId(
   userId: string,
@@ -115,6 +115,7 @@ function simulateDigitalPoolPlacement(
   levelById: Map<string, number>,
   rows: TeamRow[],
   minBinaryLevel: number,
+  companyRootId: string,
 ): {
   nodes: Array<Record<string, unknown>>;
   levels: Record<string, number>;
@@ -129,6 +130,15 @@ function simulateDigitalPoolPlacement(
   const placedIds: string[] = [];
   const entryOwnerById = new Map<string, string>();
   const fundedSlots: Array<{ id: string; ownerId: string; receiverId: string; entryNo: 1 | 2 }> = [];
+
+  if (companyRootId && rowById.has(companyRootId)) {
+    placedIds.push(companyRootId);
+    poolParentById.set(companyRootId, null);
+    poolDepthById.set(companyRootId, 0);
+    slotCountById.set(companyRootId, 0);
+    placementIndexById.set(companyRootId, 0);
+    entryOwnerById.set(companyRootId, companyRootId);
+  }
 
   type PoolQueueEntry =
     | { kind: "real"; id: string; ownerId: string }
@@ -184,6 +194,25 @@ function simulateDigitalPoolPlacement(
   const levels: Record<string, number> = {};
   const nodes: Array<Record<string, unknown>> = [];
   const idsForNodes = new Set<string>(qualifiedRows.map((r) => r.id));
+
+  if (companyRootId && rowById.has(companyRootId)) {
+    const rootRow = rowById.get(companyRootId)!;
+    nodes.push({
+      id: rootRow.id,
+      username: rootRow.username,
+      email: rootRow.email,
+      walletAddress: rootRow.walletAddress,
+      referrerCode: rootRow.referrerCode,
+      referredById: null,
+      createdAt: rootRow.createdAt,
+      depth: 0,
+      verified: true,
+      binaryLevelsCompleted: levelById.get(companyRootId) ?? 0,
+      userPanelL1CompletedAt: rootRow.userPanelLevel1CompletedAt ?? new Date(getUserPanelL1CompletedAtMs(rootRow, rows)),
+      poolPlacementIndex: placementIndexById.get(companyRootId) ?? 0,
+      slotsFilled: slotCountById.get(companyRootId) ?? 0,
+    });
+  }
 
   for (const id of idsForNodes) {
     const row = rowById.get(id);
@@ -247,13 +276,13 @@ function simulateDigitalPoolPlacement(
     nodes,
     levels,
     total,
-    poolTreeAnchorId: qualifiedRows[0]?.id ?? "",
+    poolTreeAnchorId: companyRootId || qualifiedRows[0]?.id || "",
   };
 }
 
 /**
- * Cron / global reconcile: har admin leg ke liye alag tree simulate karke rewards sync karein.
- * `poolMemberId` empty ho to bhi yeh use karein (my-network empty string ab use nahi karta).
+ * Cron / global reconcile: ek hi global Digital Pool tree (root = company admin), saari qualified lines
+ * mil kar 3-wide BFS queue — rewards sync isi merged tree par.
  */
 export async function buildDigitalPoolNetworkAllLegsForReconcile(
   db: PrismaClient,
@@ -297,27 +326,15 @@ export async function buildDigitalPoolNetworkAllLegsForReconcile(
       .map((r) => markUserPanelLevel1CompletedAtIfNeeded(db, r.id, new Date(getUserPanelL1CompletedAtMs(r, rows)))),
   );
 
-  const legRootIds = rows.filter((r) => r.referredById === anchorRootId).map((r) => r.id);
-  const merged: Array<Record<string, unknown>> = [];
-
-  for (const legId of legRootIds) {
-    const qualifiedRows = qualifiedAll.filter(
-      (r) => getDigitalPoolLegRootId(r.id, anchorRootId, rowById) === legId,
-    );
-    if (qualifiedRows.length === 0) continue;
-    const { nodes } = simulateDigitalPoolPlacement(qualifiedRows, rowById, levelById, rows, minBinaryLevel);
-    merged.push(...nodes);
-  }
-
-  return merged;
+  const { nodes } = simulateDigitalPoolPlacement(qualifiedAll, rowById, levelById, rows, minBinaryLevel, anchorRootId);
+  return nodes;
 }
 
 const VIEWER_DIRECT_CAP = 24;
 
 /**
- * **Har admin leg ka alag Digital Pool tree** — doosri leg ke qualified members is tree mein nahi aate.
- *
- * Placement same: pehla qualifier us leg ka root; phir 3-wide BFS queue.
+ * **Global Digital Pool tree** — company admin `depth 0`, neeche saari qualified lines ek hi 3-wide BFS queue:
+ * admin ki kisi bhi referral leg se jo pehle panel L1 clear kare wo pehla slot, phir doosra, teesra, waghaira.
  */
 export async function buildDigitalPoolNetworkResponse(
   db: PrismaClient,
@@ -387,39 +404,32 @@ export async function buildDigitalPoolNetworkResponse(
   }));
 
   const viewerLegRoot = poolMemberId ? getDigitalPoolLegRootId(poolMemberId, anchorRootId, rowById) : null;
-  if (!poolMemberId || poolMemberId === anchorRootId || !viewerLegRoot) {
+  if (!poolMemberId) {
     return {
       nodes: [],
       levels: {},
       total: 0,
       viewerDirectReferrals,
       poolTreeAnchorId: "",
-      poolLegRootId: viewerLegRoot ?? "",
-    };
-  }
-
-  const qualifiedRows = qualifiedAll.filter(
-    (r) => getDigitalPoolLegRootId(r.id, anchorRootId, rowById) === viewerLegRoot,
-  );
-
-  if (qualifiedRows.length === 0) {
-    return {
-      nodes: [],
-      levels: {},
-      total: 0,
-      viewerDirectReferrals,
-      poolTreeAnchorId: "",
-      poolLegRootId: viewerLegRoot,
+      poolLegRootId: "",
     };
   }
 
   const { nodes, levels, total, poolTreeAnchorId } = simulateDigitalPoolPlacement(
-    qualifiedRows,
+    qualifiedAll,
     rowById,
     levelById,
     rows,
     minBinaryLevel,
+    anchorRootId,
   );
 
-  return { nodes, levels, total, viewerDirectReferrals, poolTreeAnchorId, poolLegRootId: viewerLegRoot };
+  return {
+    nodes,
+    levels,
+    total,
+    viewerDirectReferrals,
+    poolTreeAnchorId,
+    poolLegRootId: viewerLegRoot ?? "",
+  };
 }

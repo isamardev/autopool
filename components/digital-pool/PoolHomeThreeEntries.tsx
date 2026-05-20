@@ -328,10 +328,11 @@ export function PoolHomeThreeEntries({
     if (!vid) return 0;
     return countQualifiedPoolDescendants(teamNodes, vid);
   }, [loading, teamNodes, viewerKey]);
+
   const globalRootName = useMemo(() => {
     const root = teamNodes?.find((n) => Number(n.depth) === 0 || n.referredById == null);
     const name = root?.username ? String(root.username).trim() : "";
-    return name || "First qualified user";
+    return name || "Company / Admin";
   }, [teamNodes]);
 
   const showTree = Boolean(teamNodes && teamNodes.length > 0);
@@ -383,7 +384,7 @@ export function PoolHomeThreeEntries({
             <div className="mb-4 rounded-xl bg-primary/5 px-3 py-2 text-center text-xs text-foreground ring-1 ring-primary/20">
               Network load ho gaya: <span className="font-medium">{teamNodes.length} member(s)</span> — abhi aap ke
               neeche <span className="font-medium">koi plan L1+ qualified downline</span> pool mein nahi. Jab wo user panel
-              se level 1 complete karenge tab is leg ki queue mein next position par yahan dikhenge.
+              se level 1 complete karenge tab global pool queue mein next position par yahan dikhenge.
             </div>
           ) : null}
           {showTree ? (
@@ -391,7 +392,7 @@ export function PoolHomeThreeEntries({
           <div className="flex flex-col items-center">
             <div className="w-full max-w-md rounded-2xl bg-primary/10 px-5 py-3 text-center ring-1 ring-primary/30">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-subtext">
-                Is leg ka pehla qualifier · root
+                Company / Admin · pool root (sari lines ek tree)
               </div>
               <div className="mt-1 text-lg font-semibold text-foreground">{globalRootName}</div>
             </div>

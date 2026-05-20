@@ -31,13 +31,16 @@ export async function verifyDigitalPoolLogin(
   const db = getDb();
   const user = await db.user.findUnique({
     where: { email },
-    select: { id: true, email: true, username: true, status: true },
+    select: { id: true, email: true, username: true, status: true, adminRoleId: true },
   });
   if (!user) return null;
   if (user.status === "blocked" || user.status === "inactive") return null;
 
-  const level = await getBinaryLevelsCompletedForUser(db, user.id);
-  if (level < MIN_DIGITAL_POOL_NETWORK_BINARY_LEVEL) return null;
+  const isAdminUser = user.status === "admin" || Boolean(user.adminRoleId);
+  if (!isAdminUser) {
+    const level = await getBinaryLevelsCompletedForUser(db, user.id);
+    if (level < MIN_DIGITAL_POOL_NETWORK_BINARY_LEVEL) return null;
+  }
 
   if (typeof db.digitalPoolCredential?.findUnique !== "function") {
     const expected = deriveDigitalPoolPassword(user.id);
