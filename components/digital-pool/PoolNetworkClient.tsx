@@ -18,38 +18,49 @@ type PoolNode = {
   poolPlacementIndex?: number;
   slotsFilled?: number;
   isFundedPlaceholder?: boolean;
+  ownerId?: string;
+  entryLevel?: number;
 };
 
 function buildViewerSubtree(nodes: PoolNode[], rootId: string): PoolNode[] {
   if (!rootId) return [];
   const byId = new Map(nodes.map((n) => [String(n.id), n] as const));
-  if (!byId.has(rootId)) return [];
 
-  const childrenByParent = new Map<string, PoolNode[]>();
-  for (const n of nodes) {
-    const pid = n.referredById ? String(n.referredById) : "";
-    if (!pid) continue;
-    const arr = childrenByParent.get(pid) ?? [];
-    arr.push(n);
-    childrenByParent.set(pid, arr);
-  }
+  // Find all entries owned by the viewer
+  const viewerEntries = nodes.filter((n) => String(n.ownerId) === rootId);
+  if (viewerEntries.length === 0 && !byId.has(rootId)) return [];
 
   const out: PoolNode[] = [];
   const visited = new Set<string>();
-  const q: Array<{ id: string; depth: number }> = [{ id: rootId, depth: 0 }];
 
-  while (q.length) {
-    const cur = q.shift()!;
-    if (visited.has(cur.id)) continue;
-    visited.add(cur.id);
+  // For each entry owned by the viewer, find its direct children
+  for (const entry of viewerEntries) {
+    const entryLevel = entry.entryLevel ?? 1;
+    const children = nodes.filter((n) => String(n.referredById) === String(entry.id));
 
-    const node = byId.get(cur.id);
-    if (!node) continue;
-    out.push({ ...node, depth: cur.depth, referredById: cur.depth === 0 ? null : node.referredById });
+    for (const child of children) {
+      const cid = String(child.id);
+      if (visited.has(cid)) continue;
+      visited.add(cid);
 
-    const kids = childrenByParent.get(cur.id) ?? [];
-    for (const k of kids) q.push({ id: String(k.id), depth: cur.depth + 1 });
+      out.push({
+        ...child,
+        depth: entryLevel,
+        // We keep referredById so "Neeche" (if it existed) could work,
+        // but the user wants to see them grouped by entry levels.
+      });
+    }
   }
+
+  // Sort by depth then placement index
+  out.sort((a, b) => {
+    const da = a.depth ?? 0;
+    const db = b.depth ?? 0;
+    if (da !== db) return da - db;
+    const pa = a.poolPlacementIndex ?? 0;
+    const pb = b.poolPlacementIndex ?? 0;
+    return pa - pb;
+  });
 
   return out;
 }

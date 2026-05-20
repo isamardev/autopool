@@ -141,14 +141,17 @@ function simulateDigitalPoolPlacement(
   }
 
   type PoolQueueEntry =
-    | { kind: "real"; id: string; ownerId: string }
-    | { kind: "funded"; id: string; ownerId: string; entryNo: 1 | 2 };
+    | { kind: "real"; id: string; ownerId: string; entryLevel: number }
+    | { kind: "funded"; id: string; ownerId: string; entryNo: 1 | 2; entryLevel: number };
 
   const entryQueue: PoolQueueEntry[] = qualifiedRows.map((row) => ({
     kind: "real",
     id: row.id,
     ownerId: row.id,
+    entryLevel: 1,
   }));
+
+  const entryLevelById = new Map<string, number>();
 
   let cursor = 0;
   while (cursor < entryQueue.length) {
@@ -159,6 +162,7 @@ function simulateDigitalPoolPlacement(
     poolDepthById.set(entry.id, parentId !== null ? (poolDepthById.get(parentId) ?? 0) + 1 : 0);
     slotCountById.set(entry.id, 0);
     entryOwnerById.set(entry.id, entry.ownerId);
+    entryLevelById.set(entry.id, entry.entryLevel);
     placedIds.push(entry.id);
     placementIndexById.set(entry.id, placedIds.length);
 
@@ -178,11 +182,13 @@ function simulateDigitalPoolPlacement(
       if (newCount === 3 && !processedFundedOwners.has(parentId)) {
         processedFundedOwners.add(parentId);
         const fundedOwnerId = entryOwnerById.get(parentId) ?? parentId;
+        const parentLevel = entryLevelById.get(parentId) ?? 1;
         const funded: PoolQueueEntry[] = [1, 2].map((n) => ({
           kind: "funded" as const,
           id: `__digital_pool_funded_${parentId}_${n}`,
           ownerId: fundedOwnerId,
           entryNo: n as 1 | 2,
+          entryLevel: parentLevel + 1,
         }));
         entryQueue.splice(cursor + 1, 0, ...funded);
       }
@@ -211,6 +217,8 @@ function simulateDigitalPoolPlacement(
       userPanelL1CompletedAt: rootRow.userPanelLevel1CompletedAt ?? new Date(getUserPanelL1CompletedAtMs(rootRow, rows)),
       poolPlacementIndex: placementIndexById.get(companyRootId) ?? 0,
       slotsFilled: slotCountById.get(companyRootId) ?? 0,
+      entryLevel: entryLevelById.get(companyRootId) ?? 1,
+      ownerId: entryOwnerById.get(companyRootId) ?? companyRootId,
     });
   }
 
@@ -239,6 +247,8 @@ function simulateDigitalPoolPlacement(
       userPanelL1CompletedAt: row.userPanelLevel1CompletedAt ?? new Date(getUserPanelL1CompletedAtMs(row, rows)),
       poolPlacementIndex: placementIndexById.get(id) ?? 0,
       slotsFilled: slotCountById.get(id) ?? 0,
+      entryLevel: entryLevelById.get(id) ?? 1,
+      ownerId: entryOwnerById.get(id) ?? id,
     });
   }
 
@@ -261,6 +271,8 @@ function simulateDigitalPoolPlacement(
       isFundedPlaceholder: true,
       fundedOwnerId: slot.ownerId,
       fundedUsd: 100,
+      entryLevel: entryLevelById.get(slot.id) ?? 2,
+      ownerId: entryOwnerById.get(slot.id) ?? slot.ownerId,
     });
   }
 

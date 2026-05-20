@@ -33,8 +33,7 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    "**/*.mts",
-    "../../../AppData/Local/Temp/mlm-marketing-next/types/**/*.ts"
+    "**/*.mts"
   ],
   "exclude": [
     "node_modules"
