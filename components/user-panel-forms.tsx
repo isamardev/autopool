@@ -37,9 +37,13 @@ export function UserWithdrawSection({
   const [securityCode, setSecurityCode] = useState<string>("");
   const [msg, setMsg] = useState<string>("");
 
-  /** Main panel only — Digital Pool withdraw wallet ignores account `withdraw_suspend`. */
-  const withdrawSuspended = !digitalPoolWithdraw && profile?.status === "withdraw_suspend";
-  const withdrawAutoTeamSuspend = profile?.withdrawSuspendSource === "auto_team_inactivity";
+  /** Main panel only — Digital Pool withdraw wallet ignores account `withdraw_suspend` status, 
+   * but checks its own `digitalPoolWithdrawSuspend` field. */
+  const withdrawSuspended = digitalPoolWithdraw 
+    ? !!profile?.digitalPoolWithdrawSuspend
+    : profile?.status === "withdraw_suspend";
+    
+  const withdrawAutoTeamSuspend = !digitalPoolWithdraw && profile?.withdrawSuspendSource === "auto_team_inactivity";
   const withdrawUnlocked = hasSavedBep20WithdrawAddress(profile);
   const teamInactivityDays = Number(profile?.teamWithdrawInactivityDays ?? 10);
   const withdrawWalletBalance = digitalPoolWithdraw

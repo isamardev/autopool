@@ -22,6 +22,22 @@ export async function POST(req: Request) {
     const userId = ctx.userId;
     const { address } = parsed.data;
 
+    if (ctx.isDigitalPool) {
+      const cred = await db.digitalPoolCredential.findUnique({ where: { userId } });
+      if (!cred) return NextResponse.json({ error: "Pool credentials not found" }, { status: 404 });
+      if (cred.permanentWithdrawAddress) {
+        return NextResponse.json({
+          error: "Withdrawal address is already set and cannot be changed",
+          address: cred.permanentWithdrawAddress
+        }, { status: 400 });
+      }
+      await db.digitalPoolCredential.update({
+        where: { userId },
+        data: { permanentWithdrawAddress: address }
+      });
+      return NextResponse.json({ success: true, message: "Pool withdrawal address saved permanently" });
+    }
+
     // Check if user already has an address saved
     let existingAddress = null;
     try {

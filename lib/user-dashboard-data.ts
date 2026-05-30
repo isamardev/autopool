@@ -159,14 +159,38 @@ export async function getUserDashboardPayload(
     return { success: false, status: 404, error: "User not found" };
   }
 
+  // Fetch Digital Pool Credential fields via Raw SQL to avoid Prisma Client drift errors
+  let poolSecurityCode: string | null = null;
+  let poolPermanentWithdrawAddress: string | null = null;
+  try {
+    const poolRows = await db.$queryRaw<Array<Record<string, unknown>>>(
+      Prisma.sql`SELECT "securityCode", "permanentWithdrawAddress" FROM "DigitalPoolCredential" WHERE "userId" = ${userId}`
+    );
+    if (poolRows && poolRows.length > 0) {
+      poolSecurityCode = String(poolRows[0].securityCode ?? poolRows[0].securitycode ?? "");
+      poolPermanentWithdrawAddress = String(poolRows[0].permanentWithdrawAddress ?? poolRows[0].permanentwithdrawaddress ?? "");
+    }
+  } catch (err) {
+    console.error("Failed to fetch DigitalPoolCredential via raw SQL in dashboard:", err);
+  }
+
   const digitalPoolWithdrawBalance = await reconcileDigitalPoolWithdrawBalanceFromSeatRewards(db, user.id);
 
   const withdrawBalance = Number(user.withdrawBalance ?? 0);
   const usdtBalance = Number(user.usdtBalance ?? 0);
-  let permanentWithdrawAddress: string | null = user.permanentWithdrawAddress ?? null;
-  if (permanentWithdrawAddress === "") permanentWithdrawAddress = null;
+  
+  let permanentWithdrawAddress: string | null = null;
+  let hasSecurityCode = false;
 
-  const hasSecurityCode = !!user.securityCode;
+  if (options.tryDigitalPoolL1Reward) {
+    permanentWithdrawAddress = poolPermanentWithdrawAddress || null;
+    hasSecurityCode = !!poolSecurityCode;
+  } else {
+    permanentWithdrawAddress = user.permanentWithdrawAddress ?? null;
+    hasSecurityCode = !!user.securityCode;
+  }
+  
+  if (permanentWithdrawAddress === "") permanentWithdrawAddress = null;
 
   let secondsUntilTeamWithdrawAutoSuspend: number | null = null;
   if (

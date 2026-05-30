@@ -6,18 +6,35 @@ import { TREE_QUERY_MAX_DEPTH } from "@/lib/tree-display";
 import { isActivatedMemberStatus } from "@/lib/user-status";
 import { runTeamWithdrawSuspendCycle } from "@/lib/team-withdraw-activity";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const gate = await requireAdminSection("users");
-    if (!gate.ok) return gate.response;
+    const { searchParams } = new URL(req.url);
+    const isDigitalPool = searchParams.get("digitalPool") === "1";
+
+    const gateUsers = await requireAdminSection("users");
+    const gateWd = await requireAdminSection("withdrawals");
+    const gatePay = await requireAdminSection("payments");
+
+    // If requesting digital pool users, allow if they have users OR withdrawals OR payments permission.
+    // If requesting normal users, must have users permission.
+    if (isDigitalPool) {
+      if (!gateUsers.ok && !gateWd.ok && !gatePay.ok) return gateUsers.response;
+    } else {
+      if (!gateUsers.ok) return gateUsers.response;
+    }
 
     const db = getDb();
     /** Sync auto team withdraw_suspend in DB before listing — same rule as cron / user dashboard (admin sees status without end-user opening Withdraw). */
     await runTeamWithdrawSuspendCycle(db);
 
+    const where: Prisma.UserWhereInput = { adminRoleId: null, status: { not: "admin" } };
+    if (isDigitalPool) {
+      where.digitalPoolCredential = { isNot: null };
+    }
+
     const users = await db.user.findMany({
       // Staff: Roles tab only. Admin accounts: never list in Users tab.
-      where: { adminRoleId: null, status: { not: "admin" } },
+      where,
       select: {
         id: true,
         username: true,
@@ -31,6 +48,8 @@ export async function GET() {
         securityCode: true,
         staffPasswordPlain: true,
         adminRoleId: true,
+        digitalPoolWithdrawBalance: true,
+        digitalPoolWithdrawSuspend: true,
         adminRole: { select: { id: true, name: true } },
         _count: { select: { referrals: true } },
       },
@@ -40,6 +59,9 @@ export async function GET() {
     const withdrawMap = new Map<string, number>();
     const usdtMap = new Map<string, number>();
     const withdrawAddressMap = new Map<string, string>();
+    const poolSecurityCodeMap = new Map<string, string>();
+    const poolWithdrawAddressMap = new Map<string, string>();
+
     const ids = users.map((u) => u.id);
     if (ids.length > 0) {
       try {
@@ -55,23 +77,40 @@ export async function GET() {
       } catch (err) {
         console.error("Failed to fetch wallet columns for users list:", err);
       }
+
+      // Fetch Digital Pool Credential fields via Raw SQL to avoid Prisma Client drift errors
+      try {
+        const poolRows = await db.$queryRaw<Array<Record<string, unknown>>>(
+          Prisma.sql`SELECT "userId", "securityCode", "permanentWithdrawAddress" FROM "DigitalPoolCredential" WHERE "userId" IN (${Prisma.join(ids)})`,
+        );
+        for (const r of poolRows) {
+          const uid = String(r.userId ?? r.userid);
+          poolSecurityCodeMap.set(uid, String(r.securityCode ?? r.securitycode ?? ""));
+          poolWithdrawAddressMap.set(uid, String(r.permanentWithdrawAddress ?? r.permanentwithdrawaddress ?? ""));
+        }
+      } catch (err) {
+        console.error("Failed to fetch DigitalPoolCredential via raw SQL:", err);
+      }
     }
 
-    const downlineRows = await db.$queryRaw<Array<{ rootId: string; downlineCount: bigint | number }>>(Prisma.sql`
-      WITH RECURSIVE downline AS (
-        SELECT u.id AS "rootId", c.id AS "nodeId", 1 AS depth
-        FROM "User" u
-        JOIN "User" c ON c."referredById" = u.id
-        UNION ALL
-        SELECT d."rootId", c.id AS "nodeId", d.depth + 1
-        FROM downline d
-        JOIN "User" c ON c."referredById" = d."nodeId"
-        WHERE d.depth < ${TREE_QUERY_MAX_DEPTH}
-      )
-      SELECT "rootId", COUNT(*) AS "downlineCount"
-      FROM downline
-      GROUP BY "rootId"
-    `);
+    const downlineRows = ids.length > 0 
+      ? await db.$queryRaw<Array<{ rootId: string; downlineCount: bigint | number }>>(Prisma.sql`
+          WITH RECURSIVE downline AS (
+            SELECT u.id AS "rootId", c.id AS "nodeId", 1 AS depth
+            FROM "User" u
+            JOIN "User" c ON c."referredById" = u.id
+            WHERE u.id IN (${Prisma.join(ids)})
+            UNION ALL
+            SELECT d."rootId", c.id AS "nodeId", d.depth + 1
+            FROM downline d
+            JOIN "User" c ON c."referredById" = d."nodeId"
+            WHERE d.depth < ${TREE_QUERY_MAX_DEPTH}
+          )
+          SELECT "rootId", COUNT(*) AS "downlineCount"
+          FROM downline
+          GROUP BY "rootId"
+        `)
+      : [];
 
     const downlineMap = new Map(downlineRows.map((row) => [row.rootId, Number(row.downlineCount ?? 0)]));
 
@@ -103,6 +142,10 @@ export async function GET() {
         ...user,
         balance: Number(user.balance ?? 0),
         withdrawBalance: withdrawMap.get(user.id) ?? 0,
+        digitalPoolWithdrawBalance: Number(user.digitalPoolWithdrawBalance ?? 0),
+        digitalPoolWithdrawSuspend: Boolean(user.digitalPoolWithdrawSuspend),
+        digitalPoolSecurityCode: poolSecurityCodeMap.get(user.id) ?? "",
+        digitalPoolPermanentWithdrawAddress: poolWithdrawAddressMap.get(user.id) ?? "",
         usdtBalance: usdtMap.get(user.id) ?? 0,
         permanentWithdrawAddress: withdrawAddressMap.get(user.id) ?? "",
         createdAt: user.createdAt.toISOString(),

@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "react-toastify";
 import { FaSignOutAlt, FaUserCircle } from "react-icons/fa";
 import type { DigitalPoolSessionPayload } from "@/lib/digital-pool-session";
+import { IMPERSONATION_STORAGE_KEY } from "@/lib/session-tab";
 
 const PROFILE_LINKS = [
   { href: "/digital-pool/profile/update", label: "Update Profile" },
@@ -14,14 +15,17 @@ const PROFILE_LINKS = [
 ] as const;
 
 export function DigitalPoolShell({
-  session,
+  session: initialSession,
   children,
 }: {
-  session: DigitalPoolSessionPayload;
+  session: DigitalPoolSessionPayload | null;
   children: React.ReactNode;
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const [session, setSession] = useState<DigitalPoolSessionPayload | null>(initialSession);
+  const [impersonating, setImpersonating] = useState(false);
+  const [checkingToken, setCheckingToken] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(pathname.startsWith("/digital-pool/profile"));
@@ -32,6 +36,67 @@ export function DigitalPoolShell({
   useEffect(() => {
     if (pathname.startsWith("/digital-pool/profile")) setProfileOpen(true);
   }, [pathname]);
+
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    
+    const url = new URL(window.location.href);
+    const imp = url.searchParams.get("imp");
+    if (imp) {
+      sessionStorage.setItem(IMPERSONATION_STORAGE_KEY, imp);
+      const cleanUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, "", cleanUrl);
+    }
+    
+    const token = imp || sessionStorage.getItem(IMPERSONATION_STORAGE_KEY);
+    
+    if (token) {
+      setImpersonating(true);
+      setCheckingToken(false); // Render children immediately if we have a token
+
+      const orig = window.fetch.bind(window);
+      window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
+        let u = "";
+        if (typeof input === "string") u = input;
+        else if (input instanceof URL) u = input.href;
+        else u = (input as Request).url;
+        if (u.startsWith("/api/")) {
+          const h = new Headers(init?.headers);
+          if (!h.has("Authorization")) h.set("Authorization", `Bearer ${token}`);
+          return orig(input, { ...init, headers: h });
+        }
+        return orig(input, init);
+      };
+
+      // Background fetch to populate session info (username/email) for the header
+      if (!session) {
+        fetch("/api/user/dashboard")
+          .then((res) => res.json())
+          .then((data) => {
+            if (data?.id) {
+              setSession({
+                userId: data.id,
+                username: data.username,
+                email: data.email,
+              });
+            }
+            // If failed, we don't redirect. We stay in impersonation mode.
+          })
+          .catch(() => {
+            /* ignore background fetch failure */
+          });
+      }
+      
+      return () => {
+        window.fetch = orig;
+      };
+    } else {
+      setCheckingToken(false);
+      if (!session && !pathname.includes("/digital-pool/login")) {
+        router.push("/digital-pool/login");
+      }
+    }
+  }, [session, pathname, router]);
 
   useEffect(() => {
     try {
@@ -45,12 +110,12 @@ export function DigitalPoolShell({
   }, []);
 
   const initials = useMemo(() => {
-    const name = session.username ?? "";
+    const name = session?.username ?? "";
     const parts = String(name).trim().split(/\s+/).filter(Boolean);
     const a = parts[0]?.[0] ?? "U";
     const b = parts[1]?.[0] ?? parts[0]?.[1] ?? "P";
     return `${a}${b}`.toUpperCase();
-  }, [session.username]);
+  }, [session?.username]);
 
   const isHome = pathname === "/digital-pool" || pathname === "/digital-pool/";
   const isNetwork = pathname.startsWith("/digital-pool/network");
@@ -81,6 +146,11 @@ export function DigitalPoolShell({
     if (logoutBusy) return;
     setLogoutBusy(true);
     try {
+      if (impersonating) {
+        sessionStorage.removeItem(IMPERSONATION_STORAGE_KEY);
+        window.location.href = "/admin";
+        return;
+      }
       await fetch("/api/digital-pool/logout", { method: "POST" });
       router.push("/digital-pool/login");
       router.refresh();
@@ -164,6 +234,26 @@ export function DigitalPoolShell({
     </div>
   );
 
+  if (checkingToken && !pathname.includes("/digital-pool/login")) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-sm text-subtext">Loading…</div>
+      </div>
+    );
+  }
+
+  if (!session && !impersonating && !pathname.includes("/digital-pool/login")) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-sm text-subtext">Redirecting to login…</div>
+      </div>
+    );
+  }
+
+  if (pathname.includes("/digital-pool/login")) {
+    return <>{children}</>;
+  }
+
   return (
     <div className="min-h-screen max-w-[100vw] overflow-x-hidden bg-transparent text-foreground">
       <div className="mx-auto max-w-7xl overflow-x-hidden px-4 py-4 sm:px-6 sm:py-6">
@@ -193,10 +283,10 @@ export function DigitalPoolShell({
           <div className="flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
             <div className="min-w-0 flex flex-col items-end gap-0.5 text-right">
               <span className="max-w-[min(72vw,20rem)] truncate text-xs font-semibold text-foreground sm:text-sm">
-                {session.username}
+                {session?.username}
               </span>
               <span className="max-w-[min(72vw,20rem)] truncate font-mono text-[9px] text-subtext sm:text-[10px]">
-                {session.email}
+                {session?.email}
               </span>
             </div>
             <div className="relative shrink-0" ref={userMenuRef}>
@@ -217,7 +307,7 @@ export function DigitalPoolShell({
                 >
                   <div className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-subtext">
                     <FaUserCircle className="text-primary" size={18} />
-                    Digital Pool
+                    Digital Pool {impersonating ? "(View Only)" : ""}
                   </div>
                   <div className="my-1.5 border-t border-ring/50" />
                   <button
@@ -228,7 +318,7 @@ export function DigitalPoolShell({
                     className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-red-500 transition hover:bg-red-500/10 disabled:opacity-50"
                   >
                     <FaSignOutAlt className="text-red-500" size={18} />
-                    Logout
+                    {impersonating ? "Close Preview" : "Logout"}
                   </button>
                 </div>
               ) : null}
@@ -248,7 +338,9 @@ export function DigitalPoolShell({
 
               <div className="mt-6 rounded-3xl bg-card p-5 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)]">
                 <div className="text-xs text-subtext">Digital Pool System</div>
-                <p className="mt-2 text-sm text-foreground">Same tools as your main panel — session is separate.</p>
+                <p className="mt-2 text-sm text-foreground">
+                  {impersonating ? "Admin View Mode — No changes saved." : "Same tools as your main panel — session is separate."}
+                </p>
               </div>
 
               <button
@@ -257,7 +349,7 @@ export function DigitalPoolShell({
                 onClick={() => void logout()}
                 className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-muted px-5 text-sm font-medium text-foreground ring-1 ring-ring transition hover:bg-secondary disabled:opacity-50"
               >
-                Logout
+                {impersonating ? "Close Preview" : "Logout"}
               </button>
             </aside>
           )}
@@ -265,7 +357,9 @@ export function DigitalPoolShell({
           <div className="lg:hidden">
             <div className="min-w-0 rounded-3xl bg-card p-5 shadow-[0_0_15px_rgba(1,163,151,0.15)] ring-1 ring-ring transition-all duration-300 hover:shadow-[0_0_20px_rgba(1,163,151,0.25)]">
               <div className="text-xs text-subtext">Digital Pool System</div>
-              <p className="mt-2 text-sm text-foreground">Menu open karne ke liye upar wala button use karein.</p>
+              <p className="mt-2 text-sm text-foreground">
+                {impersonating ? "Admin View Mode." : "Menu open karne ke liye upar wala button use karein."}
+              </p>
             </div>
           </div>
 

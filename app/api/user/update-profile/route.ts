@@ -19,6 +19,15 @@ export async function POST(req: Request) {
       data: { username: username.trim() }
     });
 
+    try {
+      await db.digitalPoolCredential.update({
+        where: { userId: ctx.userId },
+        data: { username: username.trim() }
+      });
+    } catch (e) {
+      // ignore if not qualified for pool yet
+    }
+
     return NextResponse.json({ success: true, user: { username: user.username } });
   } catch (error) {
     console.error("Update profile error:", error);

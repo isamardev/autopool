@@ -44,30 +44,48 @@ export async function POST(req: Request) {
     }
     await applyAutoWithdrawSuspendIfStaleForUser(db, userId);
 
-    const user = await db.user.findUnique({ where: { id: userId } });
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      include: { digitalPoolCredential: true }
+    });
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
-    if (user.status === "withdraw_suspend") {
-      return NextResponse.json(
-        { error: "Withdrawals are suspended. Please contact customer support." },
-        { status: 403 },
-      );
+
+    if (ctx.isDigitalPool) {
+      if (user.digitalPoolWithdrawSuspend) {
+        return NextResponse.json(
+          { error: "Pool withdrawals are suspended. Please contact customer support." },
+          { status: 403 },
+        );
+      }
+    } else {
+      if (user.status === "withdraw_suspend") {
+        return NextResponse.json(
+          { error: "Withdrawals are suspended. Please contact customer support." },
+          { status: 403 },
+        );
+      }
     }
 
     // Check if user has a permanent withdrawal address set
-    let permanentWithdrawAddress = (user as any).permanentWithdrawAddress;
-    if (permanentWithdrawAddress === undefined) {
-      try {
-        const rows: any[] = await db.$queryRawUnsafe(
-          `SELECT "permanentWithdrawAddress" FROM "User" WHERE id = $1`,
-          userId
-        );
-        if (rows && rows.length > 0) {
-          permanentWithdrawAddress = rows[0].permanentWithdrawAddress ?? rows[0].permanentwithdrawaddress;
+    let permanentWithdrawAddress: string | null = null;
+    if (ctx.isDigitalPool) {
+      permanentWithdrawAddress = user.digitalPoolCredential?.permanentWithdrawAddress ?? null;
+    } else {
+      permanentWithdrawAddress = (user as any).permanentWithdrawAddress ?? null;
+      if ((user as any).permanentWithdrawAddress === undefined) {
+        try {
+          const rows: any[] = await db.$queryRawUnsafe(
+            `SELECT "permanentWithdrawAddress" FROM "User" WHERE id = $1`,
+            userId
+          );
+          if (rows && rows.length > 0) {
+            permanentWithdrawAddress = rows[0].permanentWithdrawAddress ?? rows[0].permanentwithdrawaddress;
+          }
+        } catch (err) {
+          permanentWithdrawAddress = null;
         }
-      } catch (err) {
-        permanentWithdrawAddress = null;
       }
     }
 
@@ -75,14 +93,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Withdrawals only allowed to your saved permanent address" }, { status: 400 });
     }
 
-    // Handle security code check with raw query if prisma client is outdated
-    let userSecurityCode = (user as any).securityCode;
-    if (userSecurityCode === undefined) {
-      const rows: any[] = await db.$queryRawUnsafe(
-        `SELECT "securityCode" FROM "User" WHERE id = $1`,
-        userId
-      );
-      userSecurityCode = rows[0]?.securityCode;
+    // Handle security code check
+    let userSecurityCode: string | null = null;
+    if (ctx.isDigitalPool) {
+      userSecurityCode = user.digitalPoolCredential?.securityCode ?? null;
+    } else {
+      userSecurityCode = (user as any).securityCode ?? null;
+      if ((user as any).securityCode === undefined) {
+        const rows: any[] = await db.$queryRawUnsafe(
+          `SELECT "securityCode" FROM "User" WHERE id = $1`,
+          userId
+        );
+        userSecurityCode = rows[0]?.securityCode ?? null;
+      }
     }
 
     if (!userSecurityCode) {
@@ -94,16 +117,21 @@ export async function POST(req: Request) {
     }
 
     // Safely get withdrawBalance
-    let withdrawBalance = Number((user as any).withdrawBalance ?? 0);
-    if ((user as any).withdrawBalance === undefined) {
-      try {
-        const rows: any[] = await db.$queryRawUnsafe(
-          `SELECT "withdrawBalance" FROM "User" WHERE id = $1`,
-          userId
-        );
-        withdrawBalance = Number(rows[0]?.withdrawBalance ?? 0);
-      } catch (err) {
-        withdrawBalance = 0;
+    let withdrawBalance = 0;
+    if (ctx.isDigitalPool) {
+      withdrawBalance = Number(user.digitalPoolWithdrawBalance ?? 0);
+    } else {
+      withdrawBalance = Number((user as any).withdrawBalance ?? 0);
+      if ((user as any).withdrawBalance === undefined) {
+        try {
+          const rows: any[] = await db.$queryRawUnsafe(
+            `SELECT "withdrawBalance" FROM "User" WHERE id = $1`,
+            userId
+          );
+          withdrawBalance = Number(rows[0]?.withdrawBalance ?? rows[0]?.withdrawbalance ?? 0);
+        } catch (err) {
+          withdrawBalance = 0;
+        }
       }
     }
 
@@ -123,17 +151,31 @@ export async function POST(req: Request) {
     const { charity: charityShare, feePool: feePoolShare } = splitWithdrawalFeeToCharityAndFeePool(feeAmount);
 
     const withdrawal = await db.$transaction(async (tx) => {
-      // Deduct full requested (gross) from withdraw wallet; payout record is net after fee.
-      try {
-        await tx.user.update({
-          where: { id: userId },
-          data: { withdrawBalance: { decrement: new Prisma.Decimal(gross.toFixed(2)) } } as any,
-        });
-      } catch (e) {
-        await tx.$executeRawUnsafe(
-          `UPDATE "User" SET "withdrawBalance" = "withdrawBalance" - $1 WHERE id = $2`,
-          gross, userId
-        );
+      // Deduct full requested (gross) from appropriate wallet; payout record is net after fee.
+      if (ctx.isDigitalPool) {
+        try {
+          await tx.user.update({
+            where: { id: userId },
+            data: { digitalPoolWithdrawBalance: { decrement: new Prisma.Decimal(gross.toFixed(2)) } } as any,
+          });
+        } catch (e) {
+          await tx.$executeRawUnsafe(
+            `UPDATE "User" SET "digitalPoolWithdrawBalance" = "digitalPoolWithdrawBalance" - $1 WHERE id = $2`,
+            gross, userId
+          );
+        }
+      } else {
+        try {
+          await tx.user.update({
+            where: { id: userId },
+            data: { withdrawBalance: { decrement: new Prisma.Decimal(gross.toFixed(2)) } } as any,
+          });
+        } catch (e) {
+          await tx.$executeRawUnsafe(
+            `UPDATE "User" SET "withdrawBalance" = "withdrawBalance" - $1 WHERE id = $2`,
+            gross, userId
+          );
+        }
       }
       
       await tx.transaction.create({
@@ -143,7 +185,9 @@ export async function POST(req: Request) {
           level: 0,
           amount: new Prisma.Decimal((-gross).toFixed(2)),
           type: "adjustment",
-          note: `Withdrawal request lock (from withdraw wallet, ${WITHDRAW_FEE_PERCENT}% fee)`,
+          note: ctx.isDigitalPool 
+            ? `Digital Pool withdrawal request lock (${WITHDRAW_FEE_PERCENT}% fee)`
+            : `Withdrawal request lock (from withdraw wallet, ${WITHDRAW_FEE_PERCENT}% fee)`,
         },
       });
       const w = await tx.withdrawal.create({
@@ -154,6 +198,7 @@ export async function POST(req: Request) {
           status: "pending",
           grossRequested: new Prisma.Decimal(gross.toFixed(2)),
           feeAmount: new Prisma.Decimal(feeAmount.toFixed(2)),
+          digitalPoolSource: ctx.isDigitalPool,
           charityAmount:
             charityShare > 0 ? new Prisma.Decimal(charityShare.toFixed(2)) : null,
           feePoolAmount:

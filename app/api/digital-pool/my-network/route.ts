@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb } from "@/lib/db";
-import { DIGITAL_POOL_COOKIE, verifyDigitalPoolSession } from "@/lib/digital-pool-session";
+import { getDigitalPoolApiContext } from "@/lib/user-api-auth";
 import { reconcileDigitalPoolSystem } from "@/lib/digital-pool-credential-db";
 import { buildDigitalPoolNetworkResponse } from "@/lib/digital-pool-network-tree";
 import { MIN_DIGITAL_POOL_NETWORK_BINARY_LEVEL } from "@/lib/digital-pool-network-config";
@@ -25,36 +24,29 @@ function formatDigitalPoolRewardSyncErrorMessage(raw: string): string {
   return raw;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const jar = await cookies();
-    const session = verifyDigitalPoolSession(jar.get(DIGITAL_POOL_COOKIE)?.value);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const ctx = await getDigitalPoolApiContext(req);
+    if (!ctx.ok) {
+      return NextResponse.json({ error: ctx.error }, { status: ctx.status });
     }
 
     const db = getDb();
     const user = await db.user.findUnique({
-      where: { id: session.userId },
+      where: { id: ctx.userId },
       select: { id: true, status: true, digitalPoolL1RewardGrantedAt: true, digitalPoolRewardGrantedCount: true },
     });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
-    if (user.status === "inactive") {
-      return NextResponse.json({ error: "Account deactivated" }, { status: 403 });
-    }
-    if (user.status === "blocked") {
-      return NextResponse.json({ error: "Account blocked" }, { status: 403 });
-    }
 
     await reconcileDigitalPoolSystem(db, { take: 500 });
 
     const { nodes, levels, total, viewerDirectReferrals, poolTreeAnchorId, poolLegRootId } =
-      await buildDigitalPoolNetworkResponse(db, session.userId);
+      await buildDigitalPoolNetworkResponse(db, ctx.userId);
 
     const { meets: viewerDigitalPoolL1Complete, poolLegs, rawDirectQualified } =
       viewerMeetsDigitalPoolL1CompletionRule({
         nodes,
-        sessionUserId: session.userId,
+        sessionUserId: ctx.userId,
         viewerDirectReferrals,
         digitalPoolL1RewardGrantedAt: user.digitalPoolL1RewardGrantedAt,
       });
@@ -74,7 +66,7 @@ export async function GET() {
       console.error("digital-pool/my-network reward sync:", reErr);
     }
     const userAfter = await db.user.findUnique({
-      where: { id: session.userId },
+      where: { id: ctx.userId },
       select: { digitalPoolRewardGrantedCount: true },
     });
     const viewerGrantedNow =
@@ -88,7 +80,7 @@ export async function GET() {
       viewerDirectReferrals,
       poolTreeAnchorId,
       poolLegRootId,
-      viewerPoolMemberId: session.userId,
+      viewerPoolMemberId: ctx.userId,
       minBinaryLevel: MIN_DIGITAL_POOL_NETWORK_BINARY_LEVEL,
       digitalPoolL1Reward: {
         granted: viewerGrantedNow,

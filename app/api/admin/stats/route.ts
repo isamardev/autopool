@@ -45,102 +45,68 @@ export async function GET() {
     const db = getDb();
     const dayWindow = getAdminStatsDayWindow();
 
-    const loadAllUsers = async (): Promise<any[]> => {
-      try {
-        return await db.$queryRawUnsafe<any[]>(
-          `SELECT id, status, balance, COALESCE("withdrawBalance", 0) AS "withdrawBalance", COALESCE("usdtBalance", 0) AS "usdtBalance", email FROM "User"`,
-        );
-      } catch (e: any) {
-        console.error("Stats API: raw query for users failed", e.message);
-        try {
-          return await db.$queryRawUnsafe<any[]>(
-            `SELECT id, status, balance, COALESCE("withdrawBalance", 0) AS "withdrawBalance", email FROM "User"`,
-          );
-        } catch (err2: any) {
-          console.error("Stats API: fallback user query failed", err2.message);
-          try {
-            return await db.$queryRawUnsafe<any[]>(`SELECT id, status, balance, email FROM "User"`);
-          } catch (err3: any) {
-            console.error("Stats API: final fallback failed", err3.message);
-            return [];
-          }
-        }
-      }
-    };
+    const statsAgg = await db.$queryRawUnsafe<any[]>(
+      `SELECT 
+        COUNT(*) FILTER (WHERE status != 'admin' AND LOWER(email) != $1) as non_admin_count,
+        COUNT(*) FILTER (WHERE status != 'admin' AND LOWER(email) != $1 AND (status = 'active' OR status = 'withdraw_suspend')) as active_non_admin_count,
+        SUM(CASE WHEN status != 'admin' AND LOWER(email) != $1 THEN balance ELSE 0 END) as user_balance,
+        SUM(CASE WHEN status != 'admin' AND LOWER(email) != $1 THEN COALESCE("withdrawBalance", 0) ELSE 0 END) as user_withdraw,
+        SUM(CASE WHEN status != 'admin' AND LOWER(email) != $1 THEN COALESCE("usdtBalance", 0) ELSE 0 END) as user_usdt,
+        SUM(CASE WHEN status = 'admin' OR LOWER(email) = $1 THEN balance ELSE 0 END) as admin_balance,
+        SUM(CASE WHEN status = 'admin' OR LOWER(email) = $1 THEN COALESCE("withdrawBalance", 0) ELSE 0 END) as admin_withdraw,
+        SUM(CASE WHEN status = 'admin' OR LOWER(email) = $1 THEN COALESCE("usdtBalance", 0) ELSE 0 END) as admin_usdt,
+        ARRAY_AGG(id) FILTER (WHERE status = 'admin' OR LOWER(email) = $1) as admin_ids
+      FROM "User"`,
+      ADMIN_EMAIL,
+    );
 
-    const [allUsers, depAgg, wdAgg, fund] = await Promise.all([
-      loadAllUsers(),
-      db.deposit
-        .aggregate({
-          where: { status: "confirmed" },
-          _sum: { amount: true },
-        })
-        .catch((e: unknown) => {
-          console.error("Stats API: deposit table aggregate failed", e);
-          return { _sum: { amount: null } };
-        }),
-      db.withdrawal
-        .aggregate({
-          where: {
-            status: "approved",
-            user: { status: { not: "admin" } },
-          },
-          _sum: { amount: true },
-        })
-        .catch((e: unknown) => {
-          console.error("Stats API: withdrawal aggregate failed", e);
-          return { _sum: { amount: null } };
-        }),
-      db.platformFund.findUnique({ where: { id: "default" } }).catch((e: unknown) => {
-        console.error("Stats API: platform fund failed", e);
-        return null;
-      }),
-    ]);
+    const s = statsAgg[0] || {};
+    const nonAdminCount = Number(s.non_admin_count ?? 0);
+    const activeNonAdminCount = Number(s.active_non_admin_count ?? 0);
+    const totalBal = Number(s.user_balance ?? 0);
+    const totalWithdraw = Number(s.user_withdraw ?? 0);
+    const totalUsdt = Number(s.user_usdt ?? 0);
+    const adminBalance = Number(s.admin_balance ?? 0);
+    const adminWithdraw = Number(s.admin_withdraw ?? 0);
+    const adminUsdt = Number(s.admin_usdt ?? 0);
+    const adminIds: string[] = s.admin_ids ?? [];
 
-    const totalDeposits = Number(depAgg._sum.amount ?? 0);
-    const allUserWithdraw = Number(wdAgg._sum.amount ?? 0);
-    let platformFeePool = 0;
-    let charityTotal = 0;
-    if (fund) {
-      platformFeePool = Number(fund.feePoolTotal ?? 0);
-      charityTotal = Number(fund.charityTotal ?? 0);
-    }
+    const [depAgg, wdAgg, fund] = await Promise.all([
+       db.deposit
+         .aggregate({
+           where: { status: "confirmed" },
+           _sum: { amount: true },
+         })
+         .catch((e: unknown) => {
+           console.error("Stats API: deposit table aggregate failed", e);
+           return { _sum: { amount: null } };
+         }),
+       db.withdrawal
+         .aggregate({
+           where: {
+             status: "approved",
+             user: { status: { not: "admin" } },
+           },
+           _sum: { amount: true },
+         })
+         .catch((e: unknown) => {
+           console.error("Stats API: withdrawal aggregate failed", e);
+           return { _sum: { amount: null } };
+         }),
+       db.platformFund.findUnique({ where: { id: "default" } }).catch((e: unknown) => {
+         console.error("Stats API: platform fund failed", e);
+         return null;
+       }),
+     ]);
 
-    // Process Users Data (include usdtBalance in wallet totals)
-    let nonAdminCount = 0;
-    let activeNonAdminCount = 0;
-    let totalBal = 0;
-    let totalWithdraw = 0;
-    let totalUsdt = 0;
-    let adminBalance = 0;
-    let adminWithdraw = 0;
-    let adminUsdt = 0;
-    const adminIds: string[] = [];
-
-    for (const u of allUsers) {
-      const is_admin = u.status === "admin" || u.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-
-      const b = Number(u.balance || 0);
-      const w = Number(u.withdrawBalance ?? u.withdrawbalance ?? 0);
-      const usdt = Number(u.usdtBalance ?? u.usdtbalance ?? 0);
-
-      if (is_admin) {
-        adminBalance += b;
-        adminWithdraw += w;
-        adminUsdt += usdt;
-        adminIds.push(u.id);
-      } else {
-        nonAdminCount++;
-        if (isActivatedMemberStatus(u.status)) {
-          activeNonAdminCount++;
-        }
-        totalBal += b;
-        totalWithdraw += w;
-        totalUsdt += usdt;
-      }
-    }
-
-    /** L1–L20 upline rows only (excludes level 0 platform/admin share so totals match MLM logic). */
+     const totalDeposits = Number(depAgg._sum.amount ?? 0);
+     const allUserWithdraw = Number(wdAgg._sum.amount ?? 0);
+     let platformFeePool = 0;
+     let charityTotal = 0;
+     if (fund) {
+       platformFeePool = Number(fund.feePoolTotal ?? 0);
+       charityTotal = Number(fund.charityTotal ?? 0);
+     }
     const mlmCommissionWhere = { type: "commission" as const, level: { gt: 0 } };
     const mlmCommissionTodayWhere = {
       ...mlmCommissionWhere,
@@ -385,7 +351,7 @@ export async function GET() {
         activationAdminComputedLifetime,
         activationAdminComputedToday,
         activationCommissionToAdminBySource,
-        userCount: allUsers.length,
+        userCount: nonAdminCount + adminIds.length,
         nonAdminCount,
         activeNonAdminCount,
       },

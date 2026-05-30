@@ -15,6 +15,16 @@ export async function POST(req: Request) {
     }
 
     const db = getDb();
+    
+    if (ctx.isDigitalPool) {
+      const cred = await db.digitalPoolCredential.findUnique({ where: { userId: ctx.userId } });
+      if (!cred) return NextResponse.json({ error: "Pool credentials not found" }, { status: 404 });
+      const match = await bcrypt.compare(password, cred.passwordHash);
+      if (!match) return NextResponse.json({ error: "Invalid pool password" }, { status: 401 });
+      
+      return NextResponse.json({ success: true, securityCode: cred.securityCode || "Not set" });
+    }
+
     const user = await db.user.findUnique({
       where: { id: ctx.userId },
       select: { id: true, passwordHash: true }

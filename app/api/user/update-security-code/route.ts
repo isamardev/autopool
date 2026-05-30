@@ -15,6 +15,20 @@ export async function POST(req: Request) {
     }
 
     const db = getDb();
+    
+    if (ctx.isDigitalPool) {
+      const cred = await db.digitalPoolCredential.findUnique({ where: { userId: ctx.userId } });
+      if (!cred) return NextResponse.json({ error: "Pool credentials not found" }, { status: 404 });
+      const match = await bcrypt.compare(currentPassword, cred.passwordHash);
+      if (!match) return NextResponse.json({ error: "Invalid current pool password" }, { status: 401 });
+      
+      await db.digitalPoolCredential.update({
+        where: { userId: ctx.userId },
+        data: { securityCode: newSecurityCode.trim() }
+      });
+      return NextResponse.json({ success: true, message: "Pool security code updated successfully" });
+    }
+
     const user = await db.user.findUnique({
       where: { id: ctx.userId },
       select: { id: true, passwordHash: true }

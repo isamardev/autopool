@@ -426,6 +426,10 @@ export function AdminPanelClient() {
   const [poolWithdrawHistoryLoading, setPoolWithdrawHistoryLoading] = useState(false);
   const [poolUserCount, setPoolUserCount] = useState<number | null>(null);
   const [poolUserCountLoading, setPoolUserCountLoading] = useState(false);
+  const [poolUsers, setPoolUsers] = useState<any[]>([]);
+  const [poolUsersLoading, setPoolUsersLoading] = useState(false);
+  const [poolSearch, setPoolSearch] = useState("");
+  const [poolUserStatusFilter, setPoolUserStatusFilter] = useState<string>("all");
   const [deposits, setDeposits] = useState<any[]>([]);
   const [depositStatus, setDepositStatus] = useState<string>("all");
   const [userStatusFilter, setUserStatusFilter] = useState<string>("all");
@@ -476,8 +480,10 @@ export function AdminPanelClient() {
   const [editStaffNewPassword, setEditStaffNewPassword] = useState("");
   const [showEditStaffPassword, setShowEditStaffPassword] = useState(false);
   const [showEditUserNewPassword, setShowEditUserNewPassword] = useState(false);
+  const [showEditUserPoolPassword, setShowEditUserPoolPassword] = useState(false);
   const [editUserAccountStatus, setEditUserAccountStatus] = useState<"active" | "inactive" | "blocked">("active");
   const [editUserWithdrawalAccess, setEditUserWithdrawalAccess] = useState<"active" | "suspend">("active");
+  const [editUserPoolWithdrawSuspend, setEditUserPoolWithdrawSuspend] = useState<boolean>(false);
   const [adminRolesForSelect, setAdminRolesForSelect] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => {
@@ -493,6 +499,8 @@ export function AdminPanelClient() {
     if (editingUser.status === "admin") return;
     setEditUserAccountStatus(editingUser.status === "blocked" ? "blocked" : "active");
     setEditUserWithdrawalAccess(editingUser.status === "withdraw_suspend" ? "suspend" : "active");
+    setEditUserPoolWithdrawSuspend(Boolean(editingUser.digitalPoolWithdrawSuspend));
+    setShowEditUserPoolPassword(false);
   }, [editingUser?.id]);
 
   const adminFullAccess = session?.user?.adminFullAccess === true;
@@ -708,6 +716,31 @@ export function AdminPanelClient() {
       console.error("[admin users] fetch failed", e);
     } finally {
       if (!silent) setUsersLoading(false);
+    }
+  }, []);
+
+  const fetchPoolUsers = useCallback(async (silent = false) => {
+    if (!silent) setPoolUsersLoading(true);
+    try {
+      const res = await fetch("/api/admin/users?digitalPool=1", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) {
+        setPoolUsers([]);
+        const msg = typeof data?.error === "string" ? data.error : `Pool Users API failed (${res.status})`;
+        console.error("[admin pool users]", msg, data);
+        return;
+      }
+      if (Array.isArray(data?.users)) {
+        setPoolUsers(data.users);
+      } else {
+        setPoolUsers([]);
+        console.warn("[admin pool users] Unexpected response shape", data);
+      }
+    } catch (e) {
+      setPoolUsers([]);
+      console.error("[admin pool users] fetch failed", e);
+    } finally {
+      if (!silent) setPoolUsersLoading(false);
     }
   }, []);
 
@@ -940,7 +973,8 @@ export function AdminPanelClient() {
     if (!session?.user?.id) return;
     if (active !== "digitalPoolUsers") return;
     fetchPoolUserCount(false).catch(() => undefined);
-  }, [active, fetchPoolUserCount, session?.user?.id, status]);
+    fetchPoolUsers(false).catch(() => undefined);
+  }, [active, fetchPoolUserCount, fetchPoolUsers, session?.user?.id, status]);
 
   useEffect(() => {
     if (status !== "authenticated") return;
@@ -952,7 +986,10 @@ export function AdminPanelClient() {
       if (active === "payments") fetchPaymentHistory(true).catch(() => undefined);
       if (active === "withdrawHistory") fetchWithdrawHistory(true).catch(() => undefined);
       if (active === "digitalPoolWithdrawHistory") fetchPoolWithdrawHistory(true).catch(() => undefined);
-      if (active === "digitalPoolUsers") fetchPoolUserCount(true).catch(() => undefined);
+      if (active === "digitalPoolUsers") {
+        fetchPoolUserCount(true).catch(() => undefined);
+        fetchPoolUsers(true).catch(() => undefined);
+      }
     };
     const id = window.setInterval(refresh, ADMIN_POLL_MS);
     const onVis = () => {
@@ -1521,9 +1558,12 @@ export function AdminPanelClient() {
                                 type="button"
                                 title="Open user dashboard (new tab)"
                                 onClick={() => {
+                                  const targetPath = "/dashboard";
+                                  const panelLabel = "dashboard";
+                                  
                                   setConfirmModal({
-                                    message: `Open ${u.username}'s dashboard in a new tab? Your admin session stays on this tab; the other tab uses a secure view token (no logout).`,
-                                    confirmLabel: "Open dashboard",
+                                    message: `Open ${u.username}'s ${panelLabel} in a new tab? Your admin session stays on this tab; the other tab uses a secure view token (no logout).`,
+                                    confirmLabel: "Open panel",
                                     onConfirm: async () => {
                                       setConfirmModal(null);
                                       try {
@@ -1543,12 +1583,12 @@ export function AdminPanelClient() {
                                           return;
                                         }
                                         window.open(
-                                          `/dashboard?imp=${encodeURIComponent(token)}`,
+                                          `${targetPath}?imp=${encodeURIComponent(token)}`,
                                           "_blank",
                                           "noopener,noreferrer",
                                         );
                                       } catch {
-                                        toast.error("Failed to open dashboard");
+                                        toast.error("Failed to open panel");
                                       }
                                     },
                                   });
@@ -2225,24 +2265,307 @@ export function AdminPanelClient() {
                       Members with a Digital Pool login card created (see Digital Pool credential in the database).
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => fetchPoolUserCount(false).catch(() => undefined)}
-                    className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-card px-5 text-sm font-medium text-foreground ring-1 ring-ring transition hover:bg-muted"
-                  >
-                    Refresh
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={poolUserStatusFilter}
+                      onChange={(e) => setPoolUserStatusFilter(e.target.value)}
+                      className="h-9 rounded-xl bg-background px-3 text-xs text-foreground ring-1 ring-ring sm:h-10 sm:rounded-2xl sm:text-sm"
+                    >
+                      <option value="all">All</option>
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                      <option value="blocked">Blocked</option>
+                      <option value="withdraw_suspend">Withdraw suspend</option>
+                    </select>
+                    <input
+                      value={poolSearch}
+                      onChange={(e) => setPoolSearch(e.target.value)}
+                      className="h-9 w-full min-w-[120px] flex-1 rounded-xl bg-background px-4 text-xs text-foreground ring-1 ring-ring outline-none focus:ring-2 focus:ring-primary/30 sm:h-10 sm:w-40 sm:rounded-2xl sm:text-sm"
+                      placeholder="Search"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        fetchPoolUserCount(false).catch(() => undefined);
+                        fetchPoolUsers(false).catch(() => undefined);
+                      }}
+                      className="inline-flex h-9 items-center justify-center rounded-xl bg-card px-4 text-xs font-medium text-foreground ring-1 ring-ring transition hover:bg-muted sm:h-10 sm:rounded-2xl sm:text-sm"
+                    >
+                      Refresh
+                    </button>
+                  </div>
                 </div>
-                {poolUserCountLoading ? (
-                  <div className="mt-6 px-4 py-8 text-center text-sm text-subtext">Loading…</div>
-                ) : (
-                  <div className="mt-6 rounded-2xl border border-primary/25 bg-primary/5 px-6 py-8 text-center">
-                    <div className="text-xs font-medium uppercase tracking-wide text-subtext">Digital Pool members</div>
-                    <div className="mt-2 text-4xl font-bold tabular-nums text-primary">
-                      {poolUserCount != null ? poolUserCount : "—"}
+
+                <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+                  <div className="rounded-2xl border border-primary/25 bg-primary/5 px-6 py-4 text-center sm:text-left sm:flex sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-[10px] font-medium uppercase tracking-wide text-subtext">Total Digital Pool members</div>
+                      <div className="mt-1 text-2xl font-bold tabular-nums text-primary">
+                        {poolUserCount != null ? poolUserCount : "—"}
+                      </div>
                     </div>
                   </div>
-                )}
+                </div>
+
+                <div className="mt-6 w-full max-w-full overflow-x-auto rounded-2xl ring-1 ring-ring custom-scrollbar bg-card shadow-inner">
+                  <div className="min-w-[1040px]">
+                    <div className="grid grid-cols-[1.15fr_0.62fr_0.95fr_0.72fr_1.1fr_0.58fr_1.45fr] gap-2 bg-muted/50 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-subtext border-b border-ring">
+                      <div>User</div>
+                      <div>Status</div>
+                      <div>Withdraw</div>
+                      <div>Verify</div>
+                      <div>Balances</div>
+                      <div>Downline</div>
+                      <div className="text-center">Action</div>
+                    </div>
+                    <div className="divide-y divide-ring/50">
+                      {poolUsersLoading ? (
+                        <div className="px-4 py-6 text-center text-sm text-subtext">Loading pool users...</div>
+                      ) : null}
+                      {poolUsers
+                        .filter((u) => {
+                          if (poolUserStatusFilter === "all") return true;
+                          return String(u.status ?? "").toLowerCase() === poolUserStatusFilter.toLowerCase();
+                        })
+                        .filter((u) => {
+                          if (!poolSearch.trim()) return true;
+                          const s = poolSearch.trim().toLowerCase();
+                          return (
+                            String(u.username ?? "").toLowerCase().includes(s) ||
+                            String(u.email ?? "").toLowerCase().includes(s) ||
+                            String(u.referrerCode ?? "").toLowerCase().includes(s)
+                          );
+                        })
+                        .map((u) => (
+                          <div key={u.id} className="grid grid-cols-[1.15fr_0.62fr_0.95fr_0.72fr_1.1fr_0.58fr_1.45fr] gap-2 px-4 py-4 text-sm transition hover:bg-muted/30">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-foreground">{u.username}</div>
+                              <div className="truncate text-[10px] text-subtext">{u.email}</div>
+                            </div>
+                            <div className="flex items-center">
+                              <span
+                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
+                                  u.status === "active" || u.status === "admin" || u.status === "withdraw_suspend"
+                                    ? "bg-[rgba(16,185,129,0.10)] text-foreground ring-[rgba(16,185,129,0.35)]"
+                                    : u.status === "inactive"
+                                    ? "bg-[rgba(255,106,0,0.10)] text-foreground ring-[rgba(255,106,0,0.35)]"
+                                    : "bg-[rgba(239,68,68,0.10)] text-foreground ring-[rgba(239,68,68,0.35)]"
+                                }`}
+                              >
+                                {adminUserAccountStatusLabel(u.status)}
+                              </span>
+                            </div>
+                            <div className="flex items-center min-w-0">
+                              {(() => {
+                                const w = adminUserWithdrawAccessLabel(u.status);
+                                if (w.tone === "na") {
+                                  return <span className="text-[10px] text-subtext">{w.text}</span>;
+                                }
+                                return (
+                                  <span
+                                    className={`inline-flex max-w-full truncate items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
+                                      w.tone === "suspend"
+                                        ? "bg-[rgba(245,158,11,0.12)] text-foreground ring-[rgba(245,158,11,0.4)]"
+                                        : "bg-[rgba(16,185,129,0.10)] text-foreground ring-[rgba(16,185,129,0.35)]"
+                                    }`}
+                                  >
+                                    {w.text}
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                            <div className="flex items-center">
+                              {u.verifyStatus === "verified" ? (
+                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 bg-[rgba(16,185,129,0.10)] text-foreground ring-[rgba(16,185,129,0.35)]">
+                                  VERIFIED
+                                </span>
+                              ) : u.verifyStatus === "unverified" ? (
+                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 bg-[rgba(239,68,68,0.10)] text-foreground ring-[rgba(239,68,68,0.35)]">
+                                  UNVERIFIED{typeof u.secondsLeft === "number" && u.secondsLeft > 0 ? ` · ${Math.floor(u.secondsLeft / 3600)}h` : ""}
+                                </span>
+                              ) : u.verifyStatus === "expired" ? (
+                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 bg-[rgba(255,106,0,0.10)] text-foreground ring-[rgba(255,106,0,0.35)]">
+                                  EXPIRED
+                                </span>
+                              ) : (
+                                <span className="text-xs text-subtext">—</span>
+                              )}
+                            </div>
+                            <div className="flex min-w-0 flex-col gap-0.5 text-[10px] sm:text-xs leading-tight">
+                              <div className="tabular-nums text-foreground">
+                                Pool WD: {toUSD(Number(u.digitalPoolWithdrawBalance ?? 0))}
+                              </div>
+                              <div className="tabular-nums text-subtext">
+                                Balance: {toUSD(Number(u.usdtBalance ?? 0))}
+                              </div>
+                            </div>
+                            <div className="text-subtext flex items-center">{String(u.downlineCount ?? 0)}</div>
+                            <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const st = String(u?.status ?? "");
+                                  setEditingUser(u);
+                                  if (st === "blocked") setEditUserAccountStatus("blocked");
+                                  else if (st === "inactive") setEditUserAccountStatus("inactive");
+                                  else setEditUserAccountStatus("active");
+                                  setEditUserWithdrawalAccess(st === "withdraw_suspend" ? "suspend" : "active");
+                                }}
+                                title="Edit User"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600/10 text-blue-600 ring-1 ring-blue-600/20 hover:bg-blue-600 hover:text-white transition"
+                              >
+                                ✎
+                              </button>
+                              <button
+                                type="button"
+                                title="Open user dashboard (new tab)"
+                                onClick={() => {
+                                  const targetPath = "/digital-pool";
+                                  const panelLabel = "Digital Pool panel";
+
+                                  setConfirmModal({
+                                    message: `Open ${u.username}'s ${panelLabel} in a new tab? Your admin session stays on this tab; the other tab uses a secure view token (no logout).`,
+                                    confirmLabel: "Open panel",
+                                    onConfirm: async () => {
+                                      setConfirmModal(null);
+                                      try {
+                                        const res = await fetch("/api/admin/impersonate-token", {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ email: u.email }),
+                                        });
+                                        const data = await res.json();
+                                        if (!res.ok) {
+                                          toastAdminApiError(data);
+                                          return;
+                                        }
+                                        const token = data?.token as string | undefined;
+                                        if (!token) {
+                                          toast.error("No token returned");
+                                          return;
+                                        }
+                                        window.open(
+                                          `${targetPath}?imp=${encodeURIComponent(token)}`,
+                                          "_blank",
+                                          "noopener,noreferrer",
+                                        );
+                                      } catch {
+                                        toast.error("Failed to open panel");
+                                      }
+                                    },
+                                  });
+                                }}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-green-600/10 text-green-600 ring-1 ring-green-600/20 hover:bg-green-600 hover:text-white transition"
+                              >
+                                👁
+                              </button>
+                              {u.status === "admin" ? (
+                                <span className="text-[10px] font-medium text-subtext uppercase tracking-wider px-2">Admin</span>
+                              ) : (
+                                <>
+                                  {(u.status === "inactive" || u.status === "blocked") && (
+                                    <button
+                                      type="button"
+                                      disabled={userStatusActivatingId === u.id}
+                                      title={u.status === "blocked" ? "Unblock (activate)" : "Activate"}
+                                      onClick={() => {
+                                        const actionLabel = u.status === "blocked" ? "unblock" : "activate";
+                                        setConfirmModal({
+                                          message: `You are about to ${actionLabel} ${u.username}. This will allow them to access their account again.`,
+                                          confirmLabel: actionLabel.charAt(0).toUpperCase() + actionLabel.slice(1),
+                                          onConfirm: async () => {
+                                            if (userActivateInFlightRef.current) return;
+                                            userActivateInFlightRef.current = true;
+                                            setUserStatusActivatingId(u.id);
+                                            setConfirmModal(null);
+                                            try {
+                                              const res = await fetch("/api/admin/users/status", {
+                                                method: "PATCH",
+                                                headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ id: u.id, status: "active" }),
+                                              });
+                                              const data = await res.json();
+                                              if (!res.ok) {
+                                                toastAdminApiError(data);
+                                                return;
+                                              }
+                                              toast.success(u.status === "blocked" ? "User unblocked" : "User activated");
+                                              setPoolUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, status: "active" } : x)));
+                                              setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, status: "active" } : x)));
+                                            } catch {
+                                              toast.error("Update failed");
+                                            } finally {
+                                              userActivateInFlightRef.current = false;
+                                              setUserStatusActivatingId(null);
+                                            }
+                                          },
+                                        });
+                                      }}
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20 hover:bg-primary hover:text-white transition disabled:opacity-50 disabled:pointer-events-none"
+                                    >
+                                      ✓
+                                    </button>
+                                  )}
+                                  {u.status !== "blocked" && u.status !== "admin" && (
+                                    <button
+                                      type="button"
+                                      title="Block User"
+                                      onClick={() => {
+                                        setConfirmModal({
+                                          message: `Are you sure you want to block ${u.username}? This will completely restrict their access.`,
+                                          confirmLabel: "Block User",
+                                          onConfirm: async () => {
+                                            setConfirmModal(null);
+                                            try {
+                                              const res = await fetch("/api/admin/users/status", {
+                                                method: "PATCH",
+                                                headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ id: u.id, status: "blocked" }),
+                                              });
+                                              const data = await res.json();
+                                              if (!res.ok) {
+                                                toastAdminApiError(data);
+                                                return;
+                                              }
+                                              toast.success("User blocked");
+                                              setPoolUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, status: "blocked" } : x)));
+                                              setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, status: "blocked" } : x)));
+                                            } catch {
+                                              toast.error("Update failed");
+                                            }
+                                          },
+                                        });
+                                      }}
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-red-600/10 text-red-600 ring-1 ring-red-600/20 hover:bg-red-600 hover:text-white transition"
+                                    >
+                                      ✕
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      {!poolUsersLoading &&
+                      poolUsers
+                        .filter((u) => {
+                          if (poolUserStatusFilter === "all") return true;
+                          return String(u.status ?? "").toLowerCase() === poolUserStatusFilter.toLowerCase();
+                        })
+                        .filter((u) => {
+                          if (!poolSearch.trim()) return true;
+                          const s = poolSearch.trim().toLowerCase();
+                          return (
+                            String(u.username ?? "").toLowerCase().includes(s) ||
+                            String(u.email ?? "").toLowerCase().includes(s) ||
+                            String(u.referrerCode ?? "").toLowerCase().includes(s)
+                          );
+                        }).length === 0 ? (
+                        <div className="px-4 py-6 text-center text-sm text-subtext">No data yet</div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -3066,34 +3389,80 @@ export function AdminPanelClient() {
                   toast.error("New password must be at least 6 characters");
                   return;
                 }
-                const data: Record<string, unknown> = {
+                const data: Record<string, unknown> = { 
                   id: editingUser.id,
-                  username: String(formData.get("username") ?? "").trim(),
-                  email: String(formData.get("email") ?? "").trim(),
-                  phone: String(formData.get("phone") ?? "").trim(),
-                  country: String(formData.get("country") ?? "").trim(),
-                  withdrawBalance: formData.get("withdrawBalance"),
-                  usdtBalance: formData.get("usdtBalance"),
-                  securityCode: String(formData.get("securityCode") ?? "").trim(),
-                  permanentWithdrawAddress: String(formData.get("permanentWithdrawAddress") ?? "")
-                    .trim()
-                    .replace(/\s+/g, ""),
+                  isDigitalPool: active === "digitalPoolUsers"
                 };
-                if (editingUser.status === "admin") {
-                  data.status = "admin";
-                } else if (editUserAccountStatus === "blocked") {
-                  data.status = "blocked";
-                } else if (editUserAccountStatus === "inactive") {
-                  data.status = "inactive";
-                } else {
-                  data.status = editUserWithdrawalAccess === "suspend" ? "withdraw_suspend" : "active";
+                
+                const getStr = (name: string) => {
+                  const val = formData.get(name);
+                  return val === null ? undefined : String(val).trim();
+                };
+
+                const username = getStr("username");
+                if (username !== undefined) data.username = username;
+
+                const email = getStr("email");
+                if (email !== undefined) data.email = email;
+
+                const phone = getStr("phone");
+                if (phone !== undefined) data.phone = phone;
+
+                const country = getStr("country");
+                if (country !== undefined) data.country = country;
+
+                const usdtBalance = formData.get("usdtBalance");
+                if (usdtBalance !== null) data.usdtBalance = usdtBalance;
+
+                const withdrawBalance = formData.get("withdrawBalance");
+                if (withdrawBalance !== null) data.withdrawBalance = withdrawBalance;
+
+                const digitalPoolWithdrawBalance = formData.get("digitalPoolWithdrawBalance");
+                if (digitalPoolWithdrawBalance !== null) data.digitalPoolWithdrawBalance = digitalPoolWithdrawBalance;
+
+                data.digitalPoolWithdrawSuspend = editUserPoolWithdrawSuspend;
+
+                const securityCode = getStr("securityCode");
+                if (securityCode !== undefined) {
+                  if (active === "digitalPoolUsers") data.digitalPoolSecurityCode = securityCode;
+                  else data.securityCode = securityCode;
                 }
+
+                const permanentWithdrawAddress = getStr("permanentWithdrawAddress");
+                if (permanentWithdrawAddress !== undefined) {
+                  const cleanAddr = permanentWithdrawAddress.replace(/\s+/g, "");
+                  if (active === "digitalPoolUsers") data.digitalPoolPermanentWithdrawAddress = cleanAddr;
+                  else data.permanentWithdrawAddress = cleanAddr;
+                }
+
+                if (active !== "digitalPoolUsers") {
+                  if (editingUser.status === "admin") {
+                    data.status = "admin";
+                  } else if (editUserAccountStatus === "blocked") {
+                    data.status = "blocked";
+                  } else if (editUserAccountStatus === "inactive") {
+                    data.status = "inactive";
+                  } else {
+                    data.status = editUserWithdrawalAccess === "suspend" ? "withdraw_suspend" : "active";
+                  }
+                }
+
                 if (newPwd.length > 0) {
                   data.newPassword = newPwd;
                 }
+                const poolPwd = getStr("digitalPoolPassword");
+                if (poolPwd) {
+                  if (poolPwd.length < 6) {
+                    toast.error("Digital Pool password must be at least 6 characters");
+                    return;
+                  }
+                  data.digitalPoolPassword = poolPwd;
+                }
                 if (adminFullAccess) {
                   const ar = formData.get("adminRoleId");
-                  data.adminRoleId = ar === "" || ar == null ? null : String(ar);
+                  if (ar !== null) {
+                    data.adminRoleId = ar === "" ? null : String(ar);
+                  }
                 }
                 const addrRaw = String(data.permanentWithdrawAddress ?? "").trim();
                 if (addrRaw.length > 0 && !BEP20_USDT_ADDRESS_RE.test(addrRaw)) {
@@ -3121,8 +3490,24 @@ export function AdminPanelClient() {
                     return;
                   }
                   toast.success("User updated successfully");
+                  
+                  // Update local state immediately for instant UI feedback
+                  const updatedFields = { ...data };
+                  delete updatedFields.id;
+                  
+                  const updateList = (list: any[]) => 
+                    list.map(u => u.id === editingUser.id ? { ...u, ...updatedFields } : u);
+                  
+                  setUsers(prev => updateList(prev));
+                  setPoolUsers(prev => updateList(prev));
+
                   setEditingUser(null);
-                  fetchAdminUsers().catch(() => undefined);
+                  
+                  // Sync with server in background
+                  fetchAdminUsers(true).catch(() => undefined);
+                  fetchPoolUsers(true).catch(() => undefined);
+                  fetchPoolUserCount(true).catch(() => undefined);
+                  fetchAdminDashboardData().catch(() => undefined);
                 } catch (err) {
                   toast.error("An error occurred");
                 }
@@ -3130,14 +3515,16 @@ export function AdminPanelClient() {
             >
               <div className="custom-scrollbar max-h-[min(70vh,calc(90vh-11rem))] overflow-y-auto overflow-x-hidden px-6 py-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="block">
-                  <span className="text-xs font-medium text-subtext">Username</span>
-                  <input
-                    name="username"
-                    defaultValue={editingUser.username}
-                    className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
-                  />
-                </label>
+                {active !== "digitalPoolUsers" && (
+                  <label className="block">
+                    <span className="text-xs font-medium text-subtext">Username</span>
+                    <input
+                      name="username"
+                      defaultValue={editingUser.username}
+                      className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
+                    />
+                  </label>
+                )}
                 <label className="block">
                   <span className="text-xs font-medium text-subtext">Email</span>
                   <input
@@ -3155,38 +3542,60 @@ export function AdminPanelClient() {
                     className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
                   />
                 </label>
+                {active !== "digitalPoolUsers" && (
+                  <label className="block">
+                    <span className="text-xs font-medium text-subtext">Country</span>
+                    <input
+                      name="country"
+                      defaultValue={editingUser.country}
+                      className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
+                    />
+                  </label>
+                )}
+                {active !== "digitalPoolUsers" && (
+                  <>
+                    <label className="block">
+                      <span className="text-xs font-medium text-subtext">Balance ($)</span>
+                      <input
+                        name="usdtBalance"
+                        type="number"
+                        step="0.01"
+                        readOnly={!adminFullAccess}
+                        defaultValue={editingUser.usdtBalance || 0}
+                        className={
+                          "mt-1 block w-full rounded-2xl px-4 py-2 text-sm ring-1 ring-ring outline-none " +
+                          (adminFullAccess
+                            ? "bg-background text-foreground focus:ring-2 focus:ring-primary/30"
+                            : "cursor-not-allowed bg-muted/60 text-foreground")
+                        }
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-medium text-subtext">Withdraw wallet ($)</span>
+                      <input
+                        name="withdrawBalance"
+                        type="number"
+                        step="0.01"
+                        readOnly={!adminFullAccess}
+                        defaultValue={editingUser.withdrawBalance || 0}
+                        className={
+                          "mt-1 block w-full rounded-2xl px-4 py-2 text-sm ring-1 ring-ring outline-none " +
+                          (adminFullAccess
+                            ? "bg-background text-foreground focus:ring-2 focus:ring-primary/30"
+                            : "cursor-not-allowed bg-muted/60 text-foreground")
+                        }
+                      />
+                    </label>
+                  </>
+                )}
                 <label className="block">
-                  <span className="text-xs font-medium text-subtext">Country</span>
+                  <span className="text-xs font-medium text-subtext">Pool withdraw wallet ($)</span>
                   <input
-                    name="country"
-                    defaultValue={editingUser.country}
-                    className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-medium text-subtext">Balance ($)</span>
-                  <input
-                    name="usdtBalance"
+                    name="digitalPoolWithdrawBalance"
                     type="number"
                     step="0.01"
                     readOnly={!adminFullAccess}
-                    defaultValue={editingUser.usdtBalance || 0}
-                    className={
-                      "mt-1 block w-full rounded-2xl px-4 py-2 text-sm ring-1 ring-ring outline-none " +
-                      (adminFullAccess
-                        ? "bg-background text-foreground focus:ring-2 focus:ring-primary/30"
-                        : "cursor-not-allowed bg-muted/60 text-foreground")
-                    }
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-medium text-subtext">Withdraw wallet ($)</span>
-                  <input
-                    name="withdrawBalance"
-                    type="number"
-                    step="0.01"
-                    readOnly={!adminFullAccess}
-                    defaultValue={editingUser.withdrawBalance || 0}
+                    defaultValue={editingUser.digitalPoolWithdrawBalance || 0}
                     className={
                       "mt-1 block w-full rounded-2xl px-4 py-2 text-sm ring-1 ring-ring outline-none " +
                       (adminFullAccess
@@ -3204,7 +3613,11 @@ export function AdminPanelClient() {
                   <span className="text-xs font-medium text-subtext">Withdrawal Address (USDT BEP20)</span>
                   <input
                     name="permanentWithdrawAddress"
-                    defaultValue={editingUser.permanentWithdrawAddress || ""}
+                    defaultValue={
+                      active === "digitalPoolUsers"
+                        ? editingUser.digitalPoolPermanentWithdrawAddress || ""
+                        : editingUser.permanentWithdrawAddress || ""
+                    }
                     autoComplete="off"
                     className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm font-mono text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
                     placeholder="0x followed by 40 hex characters"
@@ -3217,27 +3630,53 @@ export function AdminPanelClient() {
                   <span className="text-xs font-medium text-subtext">Security Code</span>
                   <input
                     name="securityCode"
-                    defaultValue={editingUser.securityCode}
+                    defaultValue={
+                      active === "digitalPoolUsers"
+                        ? editingUser.digitalPoolSecurityCode || ""
+                        : editingUser.securityCode || ""
+                    }
                     className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
                   />
                 </label>
+                {active !== "digitalPoolUsers" && (
+                  <div className="block sm:col-span-2">
+                    <span className="text-xs font-medium text-subtext">New password (optional)</span>
+                    <div className="relative mt-1">
+                      <input
+                        name="newPassword"
+                        type={showEditUserNewPassword ? "text" : "password"}
+                        autoComplete="new-password"
+                        placeholder="Leave blank to keep current password"
+                        className="w-full rounded-2xl bg-background py-2 pl-4 pr-12 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowEditUserNewPassword((v) => !v)}
+                        className="absolute inset-y-0 right-0 flex items-center px-4 text-subtext transition hover:text-foreground"
+                        aria-label={showEditUserNewPassword ? "Hide new password" : "Show new password"}
+                      >
+                        {showEditUserNewPassword ? <FaEyeSlash className="h-4 w-4" /> : <FaEye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="block sm:col-span-2">
-                  <span className="text-xs font-medium text-subtext">New password (optional)</span>
+                  <span className="text-xs font-medium text-subtext">Digital Pool password (optional)</span>
                   <div className="relative mt-1">
                     <input
-                      name="newPassword"
-                      type={showEditUserNewPassword ? "text" : "password"}
+                      name="digitalPoolPassword"
+                      type={showEditUserPoolPassword ? "text" : "password"}
                       autoComplete="new-password"
-                      placeholder="Leave blank to keep current password"
+                      placeholder="Leave blank to keep current pool password"
                       className="w-full rounded-2xl bg-background py-2 pl-4 pr-12 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
                     />
                     <button
                       type="button"
-                      onClick={() => setShowEditUserNewPassword((v) => !v)}
+                      onClick={() => setShowEditUserPoolPassword((v) => !v)}
                       className="absolute inset-y-0 right-0 flex items-center px-4 text-subtext transition hover:text-foreground"
-                      aria-label={showEditUserNewPassword ? "Hide new password" : "Show new password"}
+                      aria-label={showEditUserPoolPassword ? "Hide pool password" : "Show pool password"}
                     >
-                      {showEditUserNewPassword ? <FaEyeSlash className="h-4 w-4" /> : <FaEye className="h-4 w-4" />}
+                      {showEditUserPoolPassword ? <FaEyeSlash className="h-4 w-4" /> : <FaEye className="h-4 w-4" />}
                     </button>
                   </div>
                 </div>
@@ -3250,41 +3689,59 @@ export function AdminPanelClient() {
                   </div>
                 ) : (
                   <>
+                    {active !== "digitalPoolUsers" && (
+                      <>
+                        <label className="block sm:col-span-2">
+                          <span className="text-xs font-medium text-subtext">Status</span>
+                          <select
+                            value={editUserAccountStatus}
+                            onChange={(e) =>
+                              setEditUserAccountStatus(e.target.value as "active" | "inactive" | "blocked")
+                            }
+                            className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
+                          >
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive (not activated)</option>
+                            <option value="blocked">Blocked</option>
+                          </select>
+                          {editingUser.status === "inactive" ? (
+                            <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                              This user is currently inactive. Saving with Active will activate them (same as the Activate button).
+                            </p>
+                          ) : null}
+                        </label>
+                        {editUserAccountStatus === "active" && (
+                          <label className="block sm:col-span-2">
+                            <span className="text-xs font-medium text-subtext">Withdrawal</span>
+                            <select
+                              value={editUserWithdrawalAccess}
+                              onChange={(e) => setEditUserWithdrawalAccess(e.target.value as "active" | "suspend")}
+                              className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
+                            >
+                              <option value="active">Withdraw active</option>
+                              <option value="suspend">Withdrawal suspend</option>
+                            </select>
+                            <p className="mt-1 text-[11px] text-subtext">
+                              Withdraw active: user can request withdrawals. Withdrawal suspend: withdrawals locked (same as before).
+                            </p>
+                          </label>
+                        )}
+                      </>
+                    )}
                     <label className="block sm:col-span-2">
-                      <span className="text-xs font-medium text-subtext">Status</span>
+                      <span className="text-xs font-medium text-subtext">Digital Pool Withdrawal</span>
                       <select
-                        value={editUserAccountStatus}
-                        onChange={(e) =>
-                          setEditUserAccountStatus(e.target.value as "active" | "inactive" | "blocked")
-                        }
+                        value={editUserPoolWithdrawSuspend ? "suspend" : "active"}
+                        onChange={(e) => setEditUserPoolWithdrawSuspend(e.target.value === "suspend")}
                         className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
                       >
-                        <option value="active">Active</option>
-                        <option value="inactive">Inactive (not activated)</option>
-                        <option value="blocked">Blocked</option>
+                        <option value="active">Pool Withdraw active</option>
+                        <option value="suspend">Pool Withdrawal suspend</option>
                       </select>
-                      {editingUser.status === "inactive" ? (
-                        <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-                          This user is currently inactive. Saving with Active will activate them (same as the Activate button).
-                        </p>
-                      ) : null}
+                      <p className="mt-1 text-[11px] text-subtext">
+                        Controls withdrawal access specifically for the Digital Pool panel.
+                      </p>
                     </label>
-                    {editUserAccountStatus === "active" ? (
-                      <label className="block sm:col-span-2">
-                        <span className="text-xs font-medium text-subtext">Withdrawal</span>
-                        <select
-                          value={editUserWithdrawalAccess}
-                          onChange={(e) => setEditUserWithdrawalAccess(e.target.value as "active" | "suspend")}
-                          className="mt-1 block w-full rounded-2xl bg-background px-4 py-2 text-sm text-foreground ring-1 ring-ring focus:ring-2 focus:ring-primary/30 outline-none"
-                        >
-                          <option value="active">Withdraw active</option>
-                          <option value="suspend">Withdrawal suspend</option>
-                        </select>
-                        <p className="mt-1 text-[11px] text-subtext">
-                          Withdraw active: user can request withdrawals. Withdrawal suspend: withdrawals locked (same as before).
-                        </p>
-                      </label>
-                    ) : null}
                   </>
                 )}
                 {adminFullAccess && editingUser.status === "admin" ? (

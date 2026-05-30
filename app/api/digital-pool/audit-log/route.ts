@@ -1,34 +1,26 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb } from "@/lib/db";
-import { DIGITAL_POOL_COOKIE, verifyDigitalPoolSession } from "@/lib/digital-pool-session";
+import { getDigitalPoolApiContext } from "@/lib/user-api-auth";
 
 const LIMIT = 100;
 
 /** Member-only: recent Digital Pool activity for the logged-in pool session (no `/api/user/*` changes). */
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const jar = await cookies();
-    const session = verifyDigitalPoolSession(jar.get(DIGITAL_POOL_COOKIE)?.value);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const ctx = await getDigitalPoolApiContext(req);
+    if (!ctx.ok) {
+      return NextResponse.json({ error: ctx.error }, { status: ctx.status });
     }
 
     const db = getDb();
     const user = await db.user.findUnique({
-      where: { id: session.userId },
+      where: { id: ctx.userId },
       select: { id: true, status: true },
     });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
-    if (user.status === "inactive") {
-      return NextResponse.json({ error: "Account deactivated" }, { status: 403 });
-    }
-    if (user.status === "blocked") {
-      return NextResponse.json({ error: "Account blocked" }, { status: 403 });
-    }
 
     const rows = await db.digitalPoolAuditLog.findMany({
-      where: { userId: session.userId },
+      where: { userId: ctx.userId },
       orderBy: { createdAt: "desc" },
       take: LIMIT,
       select: { id: true, action: true, createdAt: true },

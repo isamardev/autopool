@@ -28,6 +28,11 @@ async function ensureUserWithdrawColumns(db: ReturnType<typeof getDb>): Promise<
   } catch (e) {
     console.error("ensureUserWithdrawColumns: usdtBalance", e);
   }
+  try {
+    await db.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "digitalPoolWithdrawSuspend" BOOLEAN DEFAULT FALSE`);
+  } catch (e) {
+    console.error("ensureUserWithdrawColumns: digitalPoolWithdrawSuspend", e);
+  }
 }
 
 async function getUsdtBalanceFromDb(db: ReturnType<typeof getDb>, userId: string): Promise<number> {
@@ -61,8 +66,14 @@ export async function PATCH(req: Request) {
       status,
       securityCode,
       permanentWithdrawAddress,
+      digitalPoolSecurityCode,
+      digitalPoolPermanentWithdrawAddress,
+      digitalPoolWithdrawBalance,
+      digitalPoolWithdrawSuspend,
+      digitalPoolPassword,
       adminRoleId,
       newPassword,
+      isDigitalPool,
     } = body;
 
     if (!id || typeof id !== "string") {
@@ -114,6 +125,12 @@ export async function PATCH(req: Request) {
     if (canEditBalances && withdrawBalance !== undefined && withdrawBalance !== null) {
       prismaData.withdrawBalance = new Prisma.Decimal(num(withdrawBalance).toFixed(2));
     }
+    if (canEditBalances && digitalPoolWithdrawBalance !== undefined && digitalPoolWithdrawBalance !== null) {
+      prismaData.digitalPoolWithdrawBalance = new Prisma.Decimal(num(digitalPoolWithdrawBalance).toFixed(2));
+    }
+    if (digitalPoolWithdrawSuspend !== undefined && digitalPoolWithdrawSuspend !== null) {
+      prismaData.digitalPoolWithdrawSuspend = Boolean(digitalPoolWithdrawSuspend);
+    }
     if (status !== undefined && status !== null) {
       prismaData.status = status;
       const st = String(status);
@@ -142,6 +159,18 @@ export async function PATCH(req: Request) {
       persistWithdrawAddress = raw.length > 0 ? raw : null;
     }
 
+    const dpCredData: Record<string, unknown> = {};
+    if (digitalPoolSecurityCode !== undefined) {
+      dpCredData.securityCode = String(digitalPoolSecurityCode ?? "").trim() || null;
+    }
+    if (digitalPoolPermanentWithdrawAddress !== undefined) {
+      const raw = String(digitalPoolPermanentWithdrawAddress ?? "").trim().replace(/\s+/g, "");
+      if (raw.length > 0 && !/^0x[a-fA-F0-9]{40}$/.test(raw)) {
+        return NextResponse.json({ error: "INVALID_ADDRESS" }, { status: 400 });
+      }
+      dpCredData.permanentWithdrawAddress = raw.length > 0 ? raw : null;
+    }
+
     const np = typeof newPassword === "string" ? newPassword.trim() : "";
     if (np.length > 0) {
       if (np.length < 6) {
@@ -152,6 +181,36 @@ export async function PATCH(req: Request) {
         prismaData.staffPasswordPlain = np;
       } else {
         prismaData.staffPasswordPlain = null;
+      }
+    }
+
+    const dpp = typeof digitalPoolPassword === "string" ? digitalPoolPassword.trim() : "";
+    if (dpp.length > 0) {
+      if (dpp.length < 6) {
+        return NextResponse.json({ error: "VALIDATION" }, { status: 400 });
+      }
+      dpCredData.passwordHash = await bcrypt.hash(dpp, 12);
+      dpCredData.passwordPlain = dpp;
+    }
+
+    if (Object.keys(dpCredData).length > 0) {
+      // Use raw SQL for DigitalPoolCredential updates to avoid Prisma Client drift issues on Windows
+      const fields = Object.keys(dpCredData);
+      const sets = fields.map((f, i) => `"${f}" = $${i + 1}`).join(", ");
+      const values = fields.map(f => dpCredData[f]);
+      try {
+        await db.$executeRawUnsafe(
+          `UPDATE "DigitalPoolCredential" SET ${sets} WHERE "userId" = $${values.length + 1}`,
+          ...values,
+          id
+        );
+      } catch (err) {
+        console.error("Failed to update DigitalPoolCredential via raw SQL:", err);
+        // Fallback to Prisma just in case
+        await db.digitalPoolCredential.updateMany({
+          where: { userId: id },
+          data: dpCredData,
+        });
       }
     }
 
